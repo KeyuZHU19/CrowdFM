@@ -2,6 +2,7 @@ import json
 import os
 from dataclasses import asdict
 from pprint import pprint
+from typing import Any
 
 import dlwheel
 import torch
@@ -18,11 +19,43 @@ def load_checkpoint(cfg, model, checkpoint_path):
     model.load_state_dict(state, strict=False)
 
 
+def normalize_seeds(raw_seeds: Any) -> list[int]:
+    """Normalize dlwheel CLI/YAML seed values into a non-empty integer list.
+
+    dlwheel may preserve command-line values such as ``seeds=[42]`` as a
+    string. Accept scalar integers, integer lists, JSON list strings, and
+    comma-separated strings so experiment commands behave consistently.
+    """
+
+    if isinstance(raw_seeds, str):
+        text = raw_seeds.strip()
+        if not text:
+            raise ValueError("seeds must not be empty")
+        try:
+            raw_seeds = json.loads(text)
+        except json.JSONDecodeError:
+            raw_seeds = [part.strip() for part in text.split(",") if part.strip()]
+
+    if isinstance(raw_seeds, int):
+        seeds = [raw_seeds]
+    elif isinstance(raw_seeds, (list, tuple, set)):
+        seeds = [int(seed) for seed in raw_seeds]
+    else:
+        raise TypeError(
+            "seeds must be an integer, a sequence of integers, a JSON list, "
+            "or a comma-separated string"
+        )
+
+    if not seeds:
+        raise ValueError("seeds must contain at least one value")
+    return seeds
+
+
 def main():
     cfg = dlwheel.setup()
     checkpoint_path = cfg.get("checkpoint_path", "checkpoint.pt")
     output_path = cfg.get("output_path", "log/cbr_audit.json")
-    seeds = cfg.get("seeds", [42, 43, 44, 45, 46])
+    seeds = normalize_seeds(cfg.get("seeds", [42, 43, 44, 45, 46]))
     raw_cbr = cfg.get("cbr", {})
     cbr_kwargs = raw_cbr.to_dict() if hasattr(raw_cbr, "to_dict") else dict(raw_cbr)
     audit_cfg = CBRConfig(**cbr_kwargs)
@@ -30,7 +63,7 @@ def main():
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    results = {"config": asdict(audit_cfg), "datasets": {}}
+    results = {"config": asdict(audit_cfg), "seeds": seeds, "datasets": {}}
     for dataset_name in sorted(load_data.get_dataset_list(cfg)):
         results["datasets"][dataset_name] = {}
         for seed in seeds:
