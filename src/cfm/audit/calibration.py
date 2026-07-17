@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 import torch
-
 from .bootstrap import conditional_monte_carlo_test
 from .disagreement import build_residual_matrix, estimate_confusion_matrices
 from .pipeline import CBRConfig, masked_data
@@ -117,6 +116,9 @@ def run_calibration_world(
         audit_edge_mask=split.audit_edge_mask,
         nuisance_edge_mask=split.nuisance_edge_mask,
         refit_confusion=(not use_oracle_p and cfg.refit_confusion_bootstrap),
+        posterior_predictive_confusion=(
+            not use_oracle_p and cfg.posterior_predictive_confusion_bootstrap
+        ),
         prior_strength=cfg.prior_strength,
         observed_statistic=residual.statistic,
         num_bootstrap=cfg.num_bootstrap,
