@@ -20,6 +20,8 @@ This file is the live execution plan. Update status, commands, seeds, failures, 
 - [x] Signed standardized residual and two-sided spectral statistic.
 - [x] Fixed-nuisance conditional Monte Carlo test.
 - [x] CrowdFM evaluation entrypoint.
+- [x] Local unit-test smoke validation.
+- [x] Official-checkpoint baseline evaluation over all 16 available dataset directories.
 - [ ] Repeated cross-fitting and result aggregation.
 - [ ] YAML experiment configuration and result schema.
 - [ ] GPU/CPU profiling.
@@ -128,3 +130,17 @@ Use independent jobs rather than distributed training:
 - V100S-3: real-mask semi-synthetic.
 
 One 24 GB GPU is sufficient for an individual job. Residual construction and bootstrap can run on CPU or GPU; benchmark both before the final sweep.
+
+## Execution log
+
+### 2026-07-16 PT — Initial local validation
+
+- Command: `pytest -q`
+- Result before the seed-parser regression test was added: `5 passed in 1.57s`.
+- Command: `python evaluate.py checkpoint_path=checkpoint.pt output_path=log/crowdfm_baseline.json`
+- Evaluated all 16 available dataset directories successfully.
+- Mean task accuracy: `0.8229134873`.
+- Mean reported per-dataset runtime: `0.0849569976` seconds.
+- Baseline output: `log/crowdfm_baseline.json`.
+- `evaluate_cbr.py` exposed a CLI parsing issue because dlwheel preserved `seeds=[42]` as a string. The entrypoint now normalizes scalar, sequence, JSON-string, and comma-separated seed specifications.
+- Next validation: pull the latest branch, confirm `6 passed`, then rerun the one-seed CbR smoke audit with `B=99`.
