@@ -48,6 +48,7 @@ def test_four_way_calibration_smoke():
     world = generate_synthetic_world(config, seed=11)
     model = UniformModel()
     cbr_config = CBRConfig(num_bootstrap=9)
+    results = {}
 
     for variant in CALIBRATION_VARIANTS:
         result = run_calibration_world(
@@ -57,16 +58,15 @@ def test_four_way_calibration_smoke():
             config=cbr_config,
             seed=3,
         )
+        results[variant] = result
         assert 0.0 < result.p_value <= 1.0
         assert result.num_audit_edges > 0
         assert result.num_supported_pairs > 0
 
-    oracle = run_calibration_world(
-        model,
-        world,
-        variant="oracle_q_oracle_p",
-        config=cbr_config,
-        seed=3,
-    )
+    oracle = results["oracle_q_oracle_p"]
     assert oracle.audit_posterior_accuracy == 1.0
     assert oracle.confusion_mae == 0.0
+    assert (
+        results["model_q_oracle_p"].audit_posterior_accuracy
+        == results["model_q_estimated_p"].audit_posterior_accuracy
+    )
