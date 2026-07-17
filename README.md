@@ -47,6 +47,8 @@ python evaluate_cbr.py \
   output_path=log/cbr_smoke.json
 ```
 
+Estimated-confusion audits use posterior-predictive calibration by default. Worker confusion rows are sampled from their nuisance-data Dirichlet posterior, and observed and replicated residuals are compared under the same draw. This propagates sparse multiclass confusion uncertainty without retraining CrowdFM.
+
 ### CbR four-way null calibration
 
 The calibration experiment runs the same synthetic worlds and cross-fit splits under four variants:
@@ -68,7 +70,7 @@ Then run the development sweep:
 python run_cbr_calibration.py config=config/cbr_calibration.yaml
 ```
 
-The development configuration runs four synthetic settings, 20 worlds per setting, and 99 Monte Carlo replicates. Results are written incrementally to `log/cbr_calibration_smoke.json`, so interrupted runs retain completed worlds.
+The quick result is written to `log/cbr_calibration_quick_posterior.json`. The development configuration runs four synthetic settings, 20 worlds per setting, and 99 Monte Carlo replicates, writing incremental results to `log/cbr_calibration_smoke_posterior.json`.
 
 ### Train
 
