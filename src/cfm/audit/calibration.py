@@ -97,6 +97,7 @@ def run_calibration_world(
             num_option=data.num_option,
             edge_mask=split.nuisance_edge_mask,
             prior_strength=cfg.prior_strength,
+            prior_mode=cfg.confusion_prior_mode,
         )
     )
 
@@ -120,6 +121,7 @@ def run_calibration_world(
             not use_oracle_p and cfg.posterior_predictive_confusion_bootstrap
         ),
         prior_strength=cfg.prior_strength,
+        prior_mode=cfg.confusion_prior_mode,
         observed_statistic=residual.statistic,
         num_bootstrap=cfg.num_bootstrap,
         seed=seed,
