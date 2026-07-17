@@ -91,6 +91,10 @@ def _load_checkpoint(model: torch.nn.Module, checkpoint_path: str, device: str) 
     model.load_state_dict(state, strict=False)
 
 
+def _mean(values: list[dict[str, Any]], key: str) -> float:
+    return sum(float(value[key]) for value in values) / len(values)
+
+
 def _summarise(runs: list[dict[str, Any]]) -> dict[str, Any]:
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for run in runs:
@@ -104,13 +108,13 @@ def _summarise(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "num_worlds": len(values),
             "rejection_rate": sum(bool(value["reject"]) for value in values) / len(values),
             "mean_p_value": sum(p_values) / len(p_values),
-            "mean_statistic": sum(float(value["statistic"]) for value in values) / len(values),
-            "mean_audit_posterior_accuracy": sum(
-                float(value["audit_posterior_accuracy"]) for value in values
-            )
-            / len(values),
-            "mean_confusion_mae": sum(float(value["confusion_mae"]) for value in values)
-            / len(values),
+            "mean_statistic": _mean(values, "statistic"),
+            "mean_audit_posterior_accuracy": _mean(values, "audit_posterior_accuracy"),
+            "mean_confusion_mae": _mean(values, "confusion_mae"),
+            "mean_disagreement_mae": _mean(values, "disagreement_mae"),
+            "mean_nuisance_support": _mean(values, "mean_nuisance_support"),
+            "mean_median_nuisance_support": _mean(values, "median_nuisance_support"),
+            "mean_min_nuisance_support": _mean(values, "min_nuisance_support"),
             "p_values": p_values,
         }
     return summary
