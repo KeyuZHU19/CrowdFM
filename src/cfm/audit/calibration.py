@@ -5,11 +5,9 @@ from typing import Literal
 
 import torch
 
-from cfm.data.crowd_data import CrowdData
-
 from .bootstrap import conditional_monte_carlo_test
 from .disagreement import build_residual_matrix, estimate_confusion_matrices
-from .pipeline import CBRConfig
+from .pipeline import CBRConfig, masked_data
 from .split import CrossFitSplit, make_crossfit_split
 from .synthetic import SyntheticWorld
 
@@ -40,19 +38,6 @@ class CalibrationWorldResult:
     num_audit_edges: int
 
 
-def _masked_data(data: CrowdData, edge_mask: torch.Tensor) -> CrowdData:
-    masked = CrowdData(
-        dim=data.dim,
-        num_worker=data.num_worker,
-        num_task=data.num_task,
-        num_option=data.num_option,
-        triple=data.triple[:, edge_mask].clone(),
-    )
-    masked.task_y = data.task_y.clone()
-    masked.setup()
-    return masked.to(data.device)
-
-
 def _oracle_posterior(world: SyntheticWorld, device: torch.device | str) -> torch.Tensor:
     return torch.nn.functional.one_hot(
         world.truth.to(device),
@@ -62,10 +47,10 @@ def _oracle_posterior(world: SyntheticWorld, device: torch.device | str) -> torc
 
 def _model_posterior(
     model: torch.nn.Module,
-    data: CrowdData,
+    world: SyntheticWorld,
     split: CrossFitSplit,
 ) -> torch.Tensor:
-    model_data = _masked_data(data, split.model_input_edge_mask)
+    model_data = masked_data(world.data, split.model_input_edge_mask)
     model.eval()
     with torch.no_grad():
         output = model(model_data)
@@ -96,7 +81,7 @@ def run_calibration_world(
 
     use_model_q = variant.startswith("model_q")
     task_posterior = (
-        _model_posterior(model, data, split)
+        _model_posterior(model, world, split)
         if use_model_q
         else _oracle_posterior(world, data.device)
     )
