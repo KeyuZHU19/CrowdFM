@@ -9,6 +9,7 @@ from .calibration import (
 from .disagreement import (
     ResidualResult,
     build_residual_matrix,
+    confusion_posterior_parameters,
     estimate_confusion_matrices,
     item_conditioned_disagreement,
     spectral_statistic,
@@ -32,6 +33,7 @@ __all__ = [
     "SyntheticWorldConfig",
     "build_residual_matrix",
     "conditional_monte_carlo_test",
+    "confusion_posterior_parameters",
     "estimate_confusion_matrices",
     "generate_synthetic_world",
     "item_conditioned_disagreement",
