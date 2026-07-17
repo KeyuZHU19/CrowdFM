@@ -23,6 +23,7 @@ class CBRConfig:
     variance_ridge: float = 1e-8
     num_bootstrap: int = 199
     alpha: float = 0.05
+    refit_confusion_bootstrap: bool = True
 
 
 def masked_data(data: CrowdData, edge_mask: torch.Tensor) -> CrowdData:
@@ -56,11 +57,15 @@ def run_cbr_audit(
     config: CBRConfig | None = None,
     seed: int = 0,
 ) -> dict[str, Any]:
-    """Run one fixed-nuisance CbR audit on a CrowdFM dataset.
+    """Run one cross-fitted CbR audit on a CrowdFM dataset.
 
     The base model receives nuisance edges and context edges only. Confusion
     matrices are estimated on nuisance items. Residuals are constructed solely
     from held-out audit edges, preventing direct label leakage into q_k.
+
+    By default, the parametric bootstrap re-simulates nuisance labels and
+    re-estimates the confusion matrices in every replicate. This avoids treating
+    the noisy plug-in confusion estimate as if it were known exactly.
     """
 
     cfg = config or CBRConfig()
@@ -105,6 +110,9 @@ def run_cbr_audit(
         task_posterior,
         confusion,
         audit_edge_mask=split.audit_edge_mask,
+        nuisance_edge_mask=split.nuisance_edge_mask,
+        refit_confusion=cfg.refit_confusion_bootstrap,
+        prior_strength=cfg.prior_strength,
         observed_statistic=residual.statistic,
         num_bootstrap=cfg.num_bootstrap,
         seed=seed,
