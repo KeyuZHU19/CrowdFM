@@ -1,7 +1,7 @@
 dim: &dim 32
 device: &device cuda:0
 checkpoint_path: checkpoint.pt
-output_path: log/cbr_calibration_smoke.json
+output_path: log/cbr_calibration_smoke_refit.json
 
 model:
   dim: *dim
@@ -21,6 +21,7 @@ cbr:
   variance_ridge: 0.00000001
   num_bootstrap: 99
   alpha: 0.05
+  refit_confusion_bootstrap: true
 
 calibration:
   num_worlds: 20
