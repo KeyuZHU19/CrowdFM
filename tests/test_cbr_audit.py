@@ -4,6 +4,7 @@ import torch
 from cfm.audit.bootstrap import conditional_monte_carlo_test
 from cfm.audit.disagreement import (
     build_residual_matrix,
+    confusion_posterior_parameters,
     estimate_confusion_matrices,
     item_conditioned_disagreement,
     spectral_statistic,
@@ -49,13 +50,23 @@ def test_crossfit_masks_are_disjoint_and_complete():
 def test_confusion_estimate_is_row_stochastic():
     triple = _toy_triple()
     posterior = torch.tensor([[0.9, 0.1], [0.1, 0.9], [0.8, 0.2], [0.2, 0.8]])
+    edge_mask = torch.ones(triple.shape[1], dtype=torch.bool)
+    parameters = confusion_posterior_parameters(
+        triple,
+        posterior,
+        num_worker=3,
+        num_option=2,
+        edge_mask=edge_mask,
+    )
     confusion = estimate_confusion_matrices(
         triple,
         posterior,
         num_worker=3,
         num_option=2,
-        edge_mask=torch.ones(triple.shape[1], dtype=torch.bool),
+        edge_mask=edge_mask,
     )
+    assert parameters.shape == (3, 2, 2)
+    assert torch.all(parameters > 0)
     assert confusion.shape == (3, 2, 2)
     assert torch.allclose(confusion.sum(-1), torch.ones(3, 2), atol=1e-6)
     assert torch.all(confusion > 0)
@@ -151,6 +162,40 @@ def test_confusion_refit_bootstrap_is_finite_and_reproducible():
         prior_strength=1.0,
         num_bootstrap=9,
         seed=321,
+    )
+    first = conditional_monte_carlo_test(**kwargs)
+    second = conditional_monte_carlo_test(**kwargs)
+
+    assert torch.isfinite(first.bootstrap_statistics).all()
+    assert torch.equal(first.bootstrap_statistics, second.bootstrap_statistics)
+    assert first.p_value == second.p_value
+    assert 0.0 < first.p_value <= 1.0
+
+
+def test_posterior_predictive_bootstrap_is_finite_and_reproducible():
+    triple = _toy_triple()
+    posterior = torch.tensor([[0.8, 0.2], [0.2, 0.8], [0.7, 0.3], [0.3, 0.7]])
+    nuisance_mask = triple[2] < 2
+    audit_mask = triple[2] >= 2
+    confusion = estimate_confusion_matrices(
+        triple,
+        posterior,
+        num_worker=3,
+        num_option=2,
+        edge_mask=nuisance_mask,
+        prior_strength=1.0,
+    )
+
+    kwargs = dict(
+        triple=triple,
+        task_posterior=posterior,
+        confusion=confusion,
+        audit_edge_mask=audit_mask,
+        nuisance_edge_mask=nuisance_mask,
+        posterior_predictive_confusion=True,
+        prior_strength=1.0,
+        num_bootstrap=9,
+        seed=654,
     )
     first = conditional_monte_carlo_test(**kwargs)
     second = conditional_monte_carlo_test(**kwargs)
