@@ -56,13 +56,19 @@ The calibration experiment runs the same synthetic worlds and cross-fit splits u
 3. oracle posterior and estimated confusion;
 4. CrowdFM posterior and estimated confusion.
 
-Run the development sweep with:
+First validate the full path with the quick configuration:
+
+```bash
+python run_cbr_calibration.py config=config/cbr_calibration_quick.yaml
+```
+
+Then run the development sweep:
 
 ```bash
 python run_cbr_calibration.py config=config/cbr_calibration.yaml
 ```
 
-The default configuration runs four synthetic settings, 20 worlds per setting, and 99 Monte Carlo replicates. Results are written incrementally to `log/cbr_calibration_smoke.json`, so interrupted runs retain completed worlds.
+The development configuration runs four synthetic settings, 20 worlds per setting, and 99 Monte Carlo replicates. Results are written incrementally to `log/cbr_calibration_smoke.json`, so interrupted runs retain completed worlds.
 
 ### Train
 
