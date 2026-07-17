@@ -2,7 +2,6 @@ import json
 import os
 from dataclasses import asdict
 from pprint import pprint
-from typing import Any
 
 import dlwheel
 import torch
@@ -10,45 +9,13 @@ import torch
 from cfm.audit import CBRConfig, run_cbr_audit
 from cfm.data import load_data
 from cfm.model.CFM import CFM
-from cfm.utils import set_seed
+from cfm.utils import normalize_seeds, set_seed
 
 
 def load_checkpoint(cfg, model, checkpoint_path):
     checkpoint = torch.load(checkpoint_path, map_location=cfg.device)
     state = checkpoint.get("model_state_dict", checkpoint)
     model.load_state_dict(state, strict=False)
-
-
-def normalize_seeds(raw_seeds: Any) -> list[int]:
-    """Normalize dlwheel CLI/YAML seed values into a non-empty integer list.
-
-    dlwheel may preserve command-line values such as ``seeds=[42]`` as a
-    string. Accept scalar integers, integer lists, JSON list strings, and
-    comma-separated strings so experiment commands behave consistently.
-    """
-
-    if isinstance(raw_seeds, str):
-        text = raw_seeds.strip()
-        if not text:
-            raise ValueError("seeds must not be empty")
-        try:
-            raw_seeds = json.loads(text)
-        except json.JSONDecodeError:
-            raw_seeds = [part.strip() for part in text.split(",") if part.strip()]
-
-    if isinstance(raw_seeds, int):
-        seeds = [raw_seeds]
-    elif isinstance(raw_seeds, (list, tuple, set)):
-        seeds = [int(seed) for seed in raw_seeds]
-    else:
-        raise TypeError(
-            "seeds must be an integer, a sequence of integers, a JSON list, "
-            "or a comma-separated string"
-        )
-
-    if not seeds:
-        raise ValueError("seeds must contain at least one value")
-    return seeds
 
 
 def main():
