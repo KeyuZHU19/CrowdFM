@@ -1,7 +1,6 @@
 import pytest
 import torch
 
-from evaluate_cbr import normalize_seeds
 from cfm.audit.bootstrap import conditional_monte_carlo_test
 from cfm.audit.disagreement import (
     build_residual_matrix,
@@ -10,6 +9,7 @@ from cfm.audit.disagreement import (
     spectral_statistic,
 )
 from cfm.audit.split import make_crossfit_split
+from cfm.utils import normalize_seeds
 
 
 def _toy_triple() -> torch.Tensor:
