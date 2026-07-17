@@ -125,3 +125,37 @@ def test_residual_and_bootstrap_are_finite_and_reproducible():
     assert torch.equal(first.bootstrap_statistics, second.bootstrap_statistics)
     assert first.p_value == second.p_value
     assert 0.0 < first.p_value <= 1.0
+
+
+def test_confusion_refit_bootstrap_is_finite_and_reproducible():
+    triple = _toy_triple()
+    posterior = torch.tensor([[0.8, 0.2], [0.2, 0.8], [0.7, 0.3], [0.3, 0.7]])
+    nuisance_mask = triple[2] < 2
+    audit_mask = triple[2] >= 2
+    confusion = estimate_confusion_matrices(
+        triple,
+        posterior,
+        num_worker=3,
+        num_option=2,
+        edge_mask=nuisance_mask,
+        prior_strength=1.0,
+    )
+
+    kwargs = dict(
+        triple=triple,
+        task_posterior=posterior,
+        confusion=confusion,
+        audit_edge_mask=audit_mask,
+        nuisance_edge_mask=nuisance_mask,
+        refit_confusion=True,
+        prior_strength=1.0,
+        num_bootstrap=9,
+        seed=321,
+    )
+    first = conditional_monte_carlo_test(**kwargs)
+    second = conditional_monte_carlo_test(**kwargs)
+
+    assert torch.isfinite(first.bootstrap_statistics).all()
+    assert torch.equal(first.bootstrap_statistics, second.bootstrap_statistics)
+    assert first.p_value == second.p_value
+    assert 0.0 < first.p_value <= 1.0
