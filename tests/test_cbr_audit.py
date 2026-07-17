@@ -1,5 +1,7 @@
+import pytest
 import torch
 
+from evaluate_cbr import normalize_seeds
 from cfm.audit.bootstrap import conditional_monte_carlo_test
 from cfm.audit.disagreement import (
     build_residual_matrix,
@@ -16,6 +18,15 @@ def _toy_triple() -> torch.Tensor:
     tasks = [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3]
     answers = [0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1]
     return torch.tensor([workers, answers, tasks], dtype=torch.long)
+
+
+def test_seed_override_normalization():
+    assert normalize_seeds(42) == [42]
+    assert normalize_seeds([42, 43]) == [42, 43]
+    assert normalize_seeds("[42]") == [42]
+    assert normalize_seeds("42,43") == [42, 43]
+    with pytest.raises(ValueError):
+        normalize_seeds("")
 
 
 def test_crossfit_masks_are_disjoint_and_complete():
