@@ -17,7 +17,8 @@ class CBRConfig:
     context_fraction: float = 0.5
     min_context_workers: int = 1
     min_audit_workers: int = 2
-    prior_strength: float = 1.0
+    prior_strength: float = 10.0
+    confusion_prior_mode: str = "global"
     min_pair_count: int = 1
     probability_clip: float = 1e-4
     variance_ridge: float = 1e-8
@@ -64,9 +65,9 @@ def run_cbr_audit(
     matrices are estimated on nuisance items. Residuals are constructed solely
     from held-out audit edges, preventing direct label leakage into q_k.
 
-    The default posterior-predictive calibration draws confusion matrices from
-    their nuisance-data Dirichlet posterior and compares observed and simulated
-    audit discrepancies under the same draw.
+    The default estimator shrinks sparse worker/class confusion rows toward a
+    leave-one-worker-out global class-conditional confusion matrix. The default
+    posterior-predictive calibration propagates the remaining row uncertainty.
     """
 
     cfg = config or CBRConfig()
@@ -96,6 +97,7 @@ def run_cbr_audit(
         num_option=data.num_option,
         edge_mask=split.nuisance_edge_mask,
         prior_strength=cfg.prior_strength,
+        prior_mode=cfg.confusion_prior_mode,
     )
     residual = build_residual_matrix(
         data.triple,
@@ -115,6 +117,7 @@ def run_cbr_audit(
         refit_confusion=cfg.refit_confusion_bootstrap,
         posterior_predictive_confusion=cfg.posterior_predictive_confusion_bootstrap,
         prior_strength=cfg.prior_strength,
+        prior_mode=cfg.confusion_prior_mode,
         observed_statistic=residual.statistic,
         num_bootstrap=cfg.num_bootstrap,
         seed=seed,
