@@ -14,7 +14,7 @@ class ResidualResult:
     statistic: float
 
 
-def estimate_confusion_matrices(
+def confusion_posterior_parameters(
     triple: torch.Tensor,
     task_posterior: torch.Tensor,
     *,
@@ -23,16 +23,16 @@ def estimate_confusion_matrices(
     edge_mask: torch.Tensor,
     prior_strength: float = 1.0,
 ) -> torch.Tensor:
-    """Estimate P_i(reported=a | truth=c) by posterior expected counts.
+    """Return Dirichlet posterior parameters for worker confusion rows.
 
-    The estimator uses only nuisance edges. The latent truth indicator is
-    replaced by the base aggregator posterior q_k(c), yielding a row-stochastic
-    tensor with shape [num_worker, num_option, num_option].
+    The latent truth indicator is replaced by the item posterior q_k(c), so the
+    returned tensor contains prior pseudo-counts plus posterior expected counts
+    with shape [num_worker, num_option, num_option].
     """
 
     if prior_strength <= 0:
         raise ValueError("prior_strength must be positive")
-    if task_posterior.shape != (task_posterior.shape[0], num_option):
+    if task_posterior.ndim != 2 or task_posterior.shape[1] != num_option:
         raise ValueError("task_posterior has an incompatible option dimension")
     if edge_mask.shape != (triple.shape[1],):
         raise ValueError("edge_mask must have one entry per annotation edge")
@@ -62,7 +62,28 @@ def estimate_confusion_matrices(
                 worker_ids[answer_mask],
                 expected_truth[answer_mask],
             )
+    return counts
 
+
+def estimate_confusion_matrices(
+    triple: torch.Tensor,
+    task_posterior: torch.Tensor,
+    *,
+    num_worker: int,
+    num_option: int,
+    edge_mask: torch.Tensor,
+    prior_strength: float = 1.0,
+) -> torch.Tensor:
+    """Estimate P_i(reported=a | truth=c) by posterior expected counts."""
+
+    counts = confusion_posterior_parameters(
+        triple,
+        task_posterior,
+        num_worker=num_worker,
+        num_option=num_option,
+        edge_mask=edge_mask,
+        prior_strength=prior_strength,
+    )
     return counts / counts.sum(dim=-1, keepdim=True).clamp_min(1e-12)
 
 
