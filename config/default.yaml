@@ -37,7 +37,8 @@ cbr:
     variance_ridge: 0.00000001
     num_bootstrap: 199
     alpha: 0.05
-    refit_confusion_bootstrap: true
+    refit_confusion_bootstrap: false
+    posterior_predictive_confusion_bootstrap: true
 
 path:
     data: "data"
