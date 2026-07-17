@@ -4,7 +4,6 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 import torch
-
 from cfm.data.crowd_data import CrowdData
 
 from .bootstrap import conditional_monte_carlo_test
@@ -26,8 +25,8 @@ class CBRConfig:
     alpha: float = 0.05
 
 
-def _masked_data(data: CrowdData, edge_mask: torch.Tensor) -> CrowdData:
-    """Create a CrowdData view containing only selected annotation edges."""
+def masked_data(data: CrowdData, edge_mask: torch.Tensor) -> CrowdData:
+    """Create an edge-masked view while preserving the original node features."""
 
     masked = CrowdData(
         dim=data.dim,
@@ -39,7 +38,15 @@ def _masked_data(data: CrowdData, edge_mask: torch.Tensor) -> CrowdData:
     if data.task_y is not None:
         masked.task_y = data.task_y.clone()
     masked.setup()
+    for name in ("worker_x", "task_x", "option_x"):
+        value = getattr(data, name, None)
+        if isinstance(value, torch.Tensor):
+            setattr(masked, name, value.clone())
     return masked.to(data.device)
+
+
+# Backward-compatible private alias for early CbR code.
+_masked_data = masked_data
 
 
 def run_cbr_audit(
@@ -69,7 +76,7 @@ def run_cbr_audit(
         min_audit_workers=cfg.min_audit_workers,
         seed=seed,
     )
-    model_data = _masked_data(data, split.model_input_edge_mask)
+    model_data = masked_data(data, split.model_input_edge_mask)
 
     model.eval()
     with torch.no_grad():
