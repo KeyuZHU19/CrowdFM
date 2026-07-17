@@ -23,9 +23,9 @@ This file is the live execution plan. Update status, commands, seeds, failures, 
 - [x] Local unit-test smoke validation.
 - [x] Official-checkpoint baseline evaluation over all 16 available dataset directories.
 - [x] One-seed real-data CbR smoke audit with `B=99`.
+- [x] YAML calibration configuration and incremental JSON result schema.
 - [ ] Add worker nuisance-support and posterior-quality diagnostics.
 - [ ] Repeated cross-fitting and result aggregation.
-- [ ] YAML experiment configuration and result schema.
 - [ ] GPU/CPU profiling.
 
 ## Phase 1 — Null calibration
@@ -42,7 +42,7 @@ Run 300 independent worlds per configuration. Report empirical rejection at alph
 
 ### Calibration decomposition
 
-Before running the full fitted pipeline, separate statistical calibration from nuisance-estimation error using four variants on the same synthetic worlds:
+Before running the full fitted pipeline, separate statistical calibration from nuisance-estimation error using four variants on the same synthetic worlds and the same cross-fit split:
 
 1. **Oracle posterior + oracle confusion**: `q_k` is one-hot ground truth and `P_i` is the generating confusion matrix. This isolates the residual statistic and Monte Carlo test.
 2. **CrowdFM posterior + oracle confusion**: isolates posterior error.
@@ -51,11 +51,28 @@ Before running the full fitted pipeline, separate statistical calibration from n
 
 Do not interpret real-data rejection rates until variant 1 is calibrated and the gap between variants 1--4 is understood.
 
-- [ ] Implement in-prior synthetic generator.
-- [ ] Implement the four-way oracle/fitted calibration decomposition.
+Development command:
+
+```bash
+python run_cbr_calibration.py config=config/cbr_calibration.yaml
+```
+
+The development configuration runs four settings, 20 worlds per setting, all four variants, and `B=99`. Results are written incrementally to `log/cbr_calibration_smoke.json`.
+
+- [x] Implement fixed-degree Dawid--Skene synthetic null generator with known truth and worker confusion matrices.
+- [x] Implement the four-way oracle/fitted calibration decomposition.
+- [x] Add configuration, incremental runner, summary statistics, and synthetic unit tests.
 - [ ] Run smoke calibration, 20 worlds/configuration.
+- [ ] Inspect rejection rates and posterior/confusion errors for all four variants.
 - [ ] Run final calibration, 300 worlds/configuration.
 - [ ] Produce calibration plot and p-value histogram.
+
+Decision rule after the smoke run:
+
+- Variant 1 inflated: debug residual/bootstrap implementation before any model changes.
+- Variant 2 inflated relative to 1: improve or recalibrate the CrowdFM item posterior/context split.
+- Variant 3 inflated relative to 1: replace the provisional expected-count confusion estimator with hierarchical shrinkage or a learned head.
+- Only variant 4 inflated: study interaction between posterior and confusion errors and repeated cross-fitting.
 
 ## Phase 2 — OOD power
 
@@ -170,4 +187,12 @@ One 24 GB GPU is sufficient for an individual job. Residual construction and boo
 - Twelve datasets attained the minimum possible p-value `1/(B+1)=0.01`; Bird had `p=0.04` and PosSent had `p=0.02`.
 - This is a diagnostic of the current fitted predictive null, not evidence that 14 real datasets are truly OOD. The provisional null combines CrowdFM posteriors with a stationary conditionally independent per-worker confusion model estimated by posterior expected counts; the high rejection rate indicates that this null and/or its nuisance estimates are too restrictive for most real datasets.
 - Raw spectral statistics are not directly comparable across datasets; instance-conditional bootstrap p-values are the relevant quantities.
-- Next action: implement oracle null calibration and the four-way posterior/confusion decomposition before modifying the detector or running final real-data claims.
+
+### 2026-07-16 PT — Four-way calibration implementation
+
+- Added `src/cfm/audit/synthetic.py` with deterministic fixed-degree Dawid--Skene worlds and known confusion matrices.
+- Added `src/cfm/audit/calibration.py`, `run_cbr_calibration.py`, and `config/cbr_calibration.yaml`.
+- All four variants reuse the same world, cross-fit split, and original CrowdFM node features.
+- Results are checkpointed after every completed world and include posterior accuracy, confusion MAE, p-values, rejection decisions, runtime, and Git commit.
+- Added two synthetic tests; isolated local execution of the new tests returned `2 passed`.
+- Next local validation: pull the branch, run the full suite (expected `8 passed`), then launch the four-configuration smoke calibration.
