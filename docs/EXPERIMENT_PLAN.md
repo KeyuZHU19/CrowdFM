@@ -51,17 +51,24 @@ Before running the full fitted pipeline, separate statistical calibration from n
 
 Do not interpret real-data rejection rates until variant 1 is calibrated and the gap between variants 1--4 is understood.
 
-Development command:
+First run the quick integration check:
+
+```bash
+python run_cbr_calibration.py config=config/cbr_calibration_quick.yaml
+```
+
+Then run the development calibration sweep:
 
 ```bash
 python run_cbr_calibration.py config=config/cbr_calibration.yaml
 ```
 
-The development configuration runs four settings, 20 worlds per setting, all four variants, and `B=99`. Results are written incrementally to `log/cbr_calibration_smoke.json`.
+The quick configuration runs two small settings, two worlds per setting, all four variants, and `B=19`. The development configuration runs four settings, 20 worlds per setting, all four variants, and `B=99`. Results are written incrementally to `log/cbr_calibration_quick.json` and `log/cbr_calibration_smoke.json`.
 
 - [x] Implement fixed-degree Dawid--Skene synthetic null generator with known truth and worker confusion matrices.
 - [x] Implement the four-way oracle/fitted calibration decomposition.
-- [x] Add configuration, incremental runner, summary statistics, and synthetic unit tests.
+- [x] Add quick/development configurations, incremental runner, summary statistics, and synthetic unit tests.
+- [ ] Run quick integration calibration.
 - [ ] Run smoke calibration, 20 worlds/configuration.
 - [ ] Inspect rejection rates and posterior/confusion errors for all four variants.
 - [ ] Run final calibration, 300 worlds/configuration.
@@ -191,8 +198,8 @@ One 24 GB GPU is sufficient for an individual job. Residual construction and boo
 ### 2026-07-16 PT — Four-way calibration implementation
 
 - Added `src/cfm/audit/synthetic.py` with deterministic fixed-degree Dawid--Skene worlds and known confusion matrices.
-- Added `src/cfm/audit/calibration.py`, `run_cbr_calibration.py`, and `config/cbr_calibration.yaml`.
+- Added `src/cfm/audit/calibration.py`, `run_cbr_calibration.py`, `config/cbr_calibration_quick.yaml`, and `config/cbr_calibration.yaml`.
 - All four variants reuse the same world, cross-fit split, and original CrowdFM node features.
 - Results are checkpointed after every completed world and include posterior accuracy, confusion MAE, p-values, rejection decisions, runtime, and Git commit.
 - Added two synthetic tests; isolated local execution of the new tests returned `2 passed`.
-- Next local validation: pull the branch, run the full suite (expected `8 passed`), then launch the four-configuration smoke calibration.
+- Next local validation: pull the branch, run the full suite (expected `8 passed`), then launch the quick calibration before the 20-world sweep.
