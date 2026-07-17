@@ -1,10 +1,10 @@
 # CbR Calibration Results
 
-This file records calibration results and the implementation decisions taken from them. Raw experiment outputs remain under `log/` and are not committed.
+This file records calibration results and implementation decisions. Raw experiment outputs remain under `log/` and are not committed.
 
-## Fixed plug-in bootstrap sweep
+## Fixed plug-in confusion sweep
 
-The first 20-world sweep held the estimated confusion matrix fixed inside every bootstrap replicate. At `alpha=0.05`, the observed rejection rates were:
+The first 20-world sweep used a fixed estimated confusion matrix inside each bootstrap replicate. At `alpha=0.05`:
 
 | Configuration | Oracle q + oracle P | CrowdFM q + oracle P | Oracle q + estimated P | CrowdFM q + estimated P |
 |---|---:|---:|---:|---:|
@@ -13,40 +13,39 @@ The first 20-world sweep held the estimated confusion matrix fixed inside every 
 | large_multiclass | 0.00 | 0.00 | 1.00 | 1.00 |
 | sparse_imbalanced | 0.10 | 0.10 | 0.80 | 0.95 |
 
-Aggregated over the 80 worlds:
+Aggregated over 80 worlds:
 
 - oracle posterior + oracle confusion: `5/80 = 6.25%`;
 - CrowdFM posterior + oracle confusion: `4/80 = 5.00%`;
 - oracle posterior + estimated confusion: `56/80 = 70.00%`;
 - CrowdFM posterior + estimated confusion: `59/80 = 73.75%`.
 
-The residual statistic and Monte Carlo test are therefore approximately calibrated when the generating confusion matrices are supplied. CrowdFM posterior error is not the dominant failure. The problem is sparse multiclass confusion uncertainty.
+The residual statistic and Monte Carlo core are approximately calibrated when the generating confusion matrices are supplied. CrowdFM posterior error is not the dominant failure. The failure is concentrated in estimating a full worker-specific multiclass confusion matrix from sparse nuisance labels.
 
-## Confusion-refit bootstrap
+## Uncertainty corrections that were insufficient
 
-A parametric refit bootstrap was tested next: simulate nuisance and audit labels from the plug-in estimate, re-estimate confusion from simulated nuisance labels, then recompute the audit statistic. The two quick multiclass worlds still rejected in both estimated-confusion variants. Refitting around a biased or weakly identified plug-in matrix did not reproduce the discrepancy between the unknown generating matrix and its nuisance estimate.
+Two uncertainty treatments were tested on the quick binary and five-class settings:
 
-## Prior-strength sweep
+1. parametric refit bootstrap, which re-simulates nuisance labels and re-estimates confusion matrices per replicate;
+2. paired Dirichlet posterior-predictive bootstrap.
 
-The quick experiment was repeated with `prior_strength` in `{0.1, 0.01, 0.001}` and `B=99`.
+Both removed no systematic rejection in the quick five-class setting: both estimated-confusion variants rejected `2/2` worlds. Sweeping the symmetric Dirichlet prior strength over `0.1`, `0.01`, and `0.001` also failed. Smaller prior strength caused the spectral statistic to become unstable because worker/class rows had only a few effective observations.
 
-- Multiclass `oracle_q_estimated_p` remained rejected in both worlds for every prior.
-- Reducing the prior caused the raw spectral statistic to grow sharply, reaching about `189` at `prior_strength=0.001`.
-- Confusion MAE remained around `0.10`; it did not improve as the prior approached zero.
+## Current diagnosis
 
-This rules out excessive shrinkage toward the uniform matrix as the sole explanation. With sparse worker-by-class support, reducing regularization instead makes low-count rows unstable.
+For the quick five-class configuration, approximately half of `150 x 5 = 750` annotations are nuisance annotations. Spread over 30 workers and five truth classes, each worker/class confusion row has only about `2.5` effective labels on average. Estimating five probabilities independently for every such row is therefore not identifiable. Bootstrap calibration cannot repair a systematically underidentified nuisance model.
 
 ## Current implementation decision
 
-The default fitted audit now uses a posterior-predictive confusion calibration:
+The default estimator now uses hierarchical global confusion shrinkage:
 
-1. compute Dirichlet posterior parameters from nuisance expected counts;
-2. draw a confusion matrix `P*` from that posterior in each replicate;
-3. simulate held-out audit labels using `P*`;
-4. compute both the observed and replicated residual statistics under the same `P*` draw;
-5. form a paired posterior-predictive p-value.
+1. pool nuisance expected counts across all workers for each truth class;
+2. construct a leave-one-worker-out global class-conditional confusion row;
+3. use that row as the Dirichlet prior mean for the held-out worker;
+4. combine it with the worker's own sparse counts using prior strength `10`;
+5. retain posterior-predictive calibration for the remaining uncertainty.
 
-This directly integrates confusion uncertainty rather than pretending the plug-in matrix is known or refitting around the same uncertain point estimate. Oracle-confusion variants continue to use fixed-confusion Monte Carlo. CrowdFM remains frozen; no training is introduced.
+This remains training-free. The official CrowdFM checkpoint is frozen throughout.
 
 ## Next run
 
@@ -56,10 +55,12 @@ pytest -q
 python run_cbr_calibration.py config=config/cbr_calibration_quick.yaml
 ```
 
-The expected test count is `10 passed`. The new quick output is written to `log/cbr_calibration_quick_posterior.json`. Only after the multiclass estimated-confusion variants stop rejecting systematically should the 20-world configuration be run:
+Expected test count: `12 passed`.
 
-```bash
-python run_cbr_calibration.py config=config/cbr_calibration.yaml
+The quick result is written to:
+
+```text
+log/cbr_calibration_quick_hierarchical.json
 ```
 
-Its output is `log/cbr_calibration_smoke_posterior.json`.
+Do not run the 20-world sweep until the two quick multiclass estimated-confusion p-values are no longer both at the rejection boundary.
