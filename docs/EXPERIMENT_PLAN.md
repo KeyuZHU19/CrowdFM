@@ -22,6 +22,8 @@ This file is the live execution plan. Update status, commands, seeds, failures, 
 - [x] CrowdFM evaluation entrypoint.
 - [x] Local unit-test smoke validation.
 - [x] Official-checkpoint baseline evaluation over all 16 available dataset directories.
+- [x] One-seed real-data CbR smoke audit with `B=99`.
+- [ ] Add worker nuisance-support and posterior-quality diagnostics.
 - [ ] Repeated cross-fitting and result aggregation.
 - [ ] YAML experiment configuration and result schema.
 - [ ] GPU/CPU profiling.
@@ -38,7 +40,19 @@ Use eight representative synthetic configurations spanning:
 
 Run 300 independent worlds per configuration. Report empirical rejection at alpha in `{0.01, 0.05, 0.10, 0.20}`. Use `B=199` during development and `B=999` for final calibration figures.
 
+### Calibration decomposition
+
+Before running the full fitted pipeline, separate statistical calibration from nuisance-estimation error using four variants on the same synthetic worlds:
+
+1. **Oracle posterior + oracle confusion**: `q_k` is one-hot ground truth and `P_i` is the generating confusion matrix. This isolates the residual statistic and Monte Carlo test.
+2. **CrowdFM posterior + oracle confusion**: isolates posterior error.
+3. **Oracle posterior + estimated confusion**: isolates confusion-estimation error.
+4. **CrowdFM posterior + estimated confusion**: evaluates the complete deployment pipeline.
+
+Do not interpret real-data rejection rates until variant 1 is calibrated and the gap between variants 1--4 is understood.
+
 - [ ] Implement in-prior synthetic generator.
+- [ ] Implement the four-way oracle/fitted calibration decomposition.
 - [ ] Run smoke calibration, 20 worlds/configuration.
 - [ ] Run final calibration, 300 worlds/configuration.
 - [ ] Produce calibration plot and p-value histogram.
@@ -55,6 +69,7 @@ Four primary alternatives, five severity levels, 100 worlds per point:
 Report AUROC, AUPRC, TPR at 5% FPR, and power at alpha=0.05. Include an observationally equivalent coalition as a documented detectability-limit negative control.
 
 - [ ] Implement OOD injectors.
+- [ ] Run conditional-coalition dependence first as the initial power sanity check.
 - [ ] Run severity sweeps.
 - [ ] Run density and coalition-size sweeps.
 - [ ] Produce power curves.
@@ -90,7 +105,8 @@ Run all CrowdFM datasets with five cross-fit seeds. Main baselines:
 
 Report all datasets in the appendix and eight representative datasets in the main paper. Real data have no definitive OOD oracle; report aggregation accuracy, audit p-value, rejection frequency, runtime, and case studies without claiming real-data OOD AUROC.
 
-- [ ] Audit all available datasets with the official checkpoint.
+- [ ] Audit all available datasets with the official checkpoint over five cross-fit seeds.
+- [ ] Report rejection frequency across splits rather than treating one split as ground truth.
 - [ ] Integrate classical baselines.
 - [ ] Implement pre-specified fallback routing.
 - [ ] Produce real-benchmark table.
@@ -105,7 +121,9 @@ Required ablations:
 - Frobenius norm;
 - maximum entry statistic;
 - global synthetic threshold;
-- CrowdFM entropy/margin confidence.
+- CrowdFM entropy/margin confidence;
+- hierarchical/global-confusion shrinkage versus a uniform Dirichlet prior;
+- worker support thresholds for nuisance confusion estimation.
 
 Report risk-coverage curves, AURC, accuracy at fixed coverage, and router regret relative to an oracle router.
 
@@ -143,4 +161,13 @@ One 24 GB GPU is sufficient for an individual job. Residual construction and boo
 - Mean reported per-dataset runtime: `0.0849569976` seconds.
 - Baseline output: `log/crowdfm_baseline.json`.
 - `evaluate_cbr.py` exposed a CLI parsing issue because dlwheel preserved `seeds=[42]` as a string. The entrypoint now normalizes scalar, sequence, JSON-string, and comma-separated seed specifications.
-- Next validation: pull the latest branch, confirm `6 passed`, then rerun the one-seed CbR smoke audit with `B=99`.
+
+### 2026-07-16 PT — One-seed real-data CbR smoke audit
+
+- Command: `python evaluate_cbr.py checkpoint_path=checkpoint.pt seeds=42 cbr.num_bootstrap=99 cbr.alpha=0.05 output_path=log/cbr_smoke.json`.
+- All 16 datasets completed and had nonzero audit edges and supported worker pairs.
+- Rejected 14/16 datasets at `alpha=0.05` (`87.5%`). Only RTE (`p=0.23`) and SP (`p=0.90`) were not rejected.
+- Twelve datasets attained the minimum possible p-value `1/(B+1)=0.01`; Bird had `p=0.04` and PosSent had `p=0.02`.
+- This is a diagnostic of the current fitted predictive null, not evidence that 14 real datasets are truly OOD. The provisional null combines CrowdFM posteriors with a stationary conditionally independent per-worker confusion model estimated by posterior expected counts; the high rejection rate indicates that this null and/or its nuisance estimates are too restrictive for most real datasets.
+- Raw spectral statistics are not directly comparable across datasets; instance-conditional bootstrap p-values are the relevant quantities.
+- Next action: implement oracle null calibration and the four-way posterior/confusion decomposition before modifying the detector or running final real-data claims.
