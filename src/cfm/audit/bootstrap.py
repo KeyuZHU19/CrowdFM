@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import torch
 
 from .disagreement import (
+    ConfusionPriorMode,
     build_residual_matrix,
     confusion_posterior_parameters,
     estimate_confusion_matrices,
@@ -42,6 +43,7 @@ def conditional_monte_carlo_test(
     refit_confusion: bool = False,
     posterior_predictive_confusion: bool = False,
     prior_strength: float = 1.0,
+    prior_mode: ConfusionPriorMode = "uniform",
     observed_statistic: float | None = None,
     num_bootstrap: int = 199,
     seed: int = 0,
@@ -57,7 +59,7 @@ def conditional_monte_carlo_test(
     - refit: simulate nuisance labels and re-estimate confusion per replicate;
     - posterior predictive: draw confusion rows from their Dirichlet posterior,
       then compare observed and replicated audit discrepancies using the same
-      draw. The last mode propagates sparse multiclass nuisance uncertainty.
+      draw.
 
     The item posterior remains fixed in all modes.
     """
@@ -66,6 +68,8 @@ def conditional_monte_carlo_test(
         raise ValueError("num_bootstrap must be positive")
     if prior_strength <= 0:
         raise ValueError("prior_strength must be positive")
+    if prior_mode not in ("uniform", "global"):
+        raise ValueError("prior_mode must be 'uniform' or 'global'")
     if refit_confusion and posterior_predictive_confusion:
         raise ValueError("choose at most one confusion uncertainty mode")
     if (refit_confusion or posterior_predictive_confusion) and nuisance_edge_mask is None:
@@ -108,6 +112,7 @@ def conditional_monte_carlo_test(
             num_option=confusion.shape[1],
             edge_mask=nuisance_edge_mask,
             prior_strength=prior_strength,
+            prior_mode=prior_mode,
         )
 
     simulation_edge_mask = audit_edge_mask
@@ -153,6 +158,7 @@ def conditional_monte_carlo_test(
                 num_option=confusion.shape[1],
                 edge_mask=nuisance_edge_mask,
                 prior_strength=prior_strength,
+                prior_mode=prior_mode,
             )
 
         replicate_statistic = build_residual_matrix(
