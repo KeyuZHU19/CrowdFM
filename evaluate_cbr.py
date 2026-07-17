@@ -23,8 +23,12 @@ def main():
     checkpoint_path = cfg.get("checkpoint_path", "checkpoint.pt")
     output_path = cfg.get("output_path", "log/cbr_audit.json")
     seeds = cfg.get("seeds", [42, 43, 44, 45, 46])
-    audit_cfg = CBRConfig(**cfg.get("cbr", {}).to_dict())
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    raw_cbr = cfg.get("cbr", {})
+    cbr_kwargs = raw_cbr.to_dict() if hasattr(raw_cbr, "to_dict") else dict(raw_cbr)
+    audit_cfg = CBRConfig(**cbr_kwargs)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
     results = {"config": asdict(audit_cfg), "datasets": {}}
     for dataset_name in sorted(load_data.get_dataset_list(cfg)):
