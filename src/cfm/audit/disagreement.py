@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import torch
+
+ConfusionPriorMode = Literal["uniform", "global"]
 
 
 @dataclass(frozen=True)
@@ -14,24 +17,16 @@ class ResidualResult:
     statistic: float
 
 
-def confusion_posterior_parameters(
+def _expected_confusion_counts(
     triple: torch.Tensor,
     task_posterior: torch.Tensor,
     *,
     num_worker: int,
     num_option: int,
     edge_mask: torch.Tensor,
-    prior_strength: float = 1.0,
 ) -> torch.Tensor:
-    """Return Dirichlet posterior parameters for worker confusion rows.
+    """Accumulate posterior expected worker/class/report counts."""
 
-    The latent truth indicator is replaced by the item posterior q_k(c), so the
-    returned tensor contains prior pseudo-counts plus posterior expected counts
-    with shape [num_worker, num_option, num_option].
-    """
-
-    if prior_strength <= 0:
-        raise ValueError("prior_strength must be positive")
     if task_posterior.ndim != 2 or task_posterior.shape[1] != num_option:
         raise ValueError("task_posterior has an incompatible option dimension")
     if edge_mask.shape != (triple.shape[1],):
@@ -42,13 +37,11 @@ def confusion_posterior_parameters(
     triple = triple.to(device)
     edge_mask = edge_mask.to(device)
 
-    counts = torch.full(
+    counts = torch.zeros(
         (num_worker, num_option, num_option),
-        fill_value=prior_strength / num_option,
         dtype=dtype,
         device=device,
     )
-
     worker_ids = triple[0, edge_mask].long()
     reported = triple[1, edge_mask].long()
     task_ids = triple[2, edge_mask].long()
@@ -65,6 +58,51 @@ def confusion_posterior_parameters(
     return counts
 
 
+def confusion_posterior_parameters(
+    triple: torch.Tensor,
+    task_posterior: torch.Tensor,
+    *,
+    num_worker: int,
+    num_option: int,
+    edge_mask: torch.Tensor,
+    prior_strength: float = 1.0,
+    prior_mode: ConfusionPriorMode = "uniform",
+) -> torch.Tensor:
+    """Return Dirichlet posterior parameters for worker confusion rows.
+
+    ``uniform`` uses a symmetric Dirichlet prior. ``global`` uses a
+    leave-one-worker-out pooled class-conditional confusion row as the prior
+    mean. The latter stabilizes sparse multiclass workers without sharing their
+    own labels twice.
+    """
+
+    if prior_strength <= 0:
+        raise ValueError("prior_strength must be positive")
+    if prior_mode not in ("uniform", "global"):
+        raise ValueError("prior_mode must be 'uniform' or 'global'")
+
+    counts = _expected_confusion_counts(
+        triple,
+        task_posterior,
+        num_worker=num_worker,
+        num_option=num_option,
+        edge_mask=edge_mask,
+    )
+
+    if prior_mode == "uniform":
+        prior = torch.full_like(counts, prior_strength / num_option)
+        return counts + prior
+
+    total_counts = counts.sum(dim=0, keepdim=True)
+    leave_one_out = (total_counts - counts).clamp_min(0.0)
+    smoothing = torch.full_like(leave_one_out, 1.0 / num_option)
+    global_rows = leave_one_out + smoothing
+    global_rows = global_rows / global_rows.sum(dim=-1, keepdim=True).clamp_min(
+        torch.finfo(global_rows.dtype).tiny
+    )
+    return counts + prior_strength * global_rows
+
+
 def estimate_confusion_matrices(
     triple: torch.Tensor,
     task_posterior: torch.Tensor,
@@ -73,6 +111,7 @@ def estimate_confusion_matrices(
     num_option: int,
     edge_mask: torch.Tensor,
     prior_strength: float = 1.0,
+    prior_mode: ConfusionPriorMode = "uniform",
 ) -> torch.Tensor:
     """Estimate P_i(reported=a | truth=c) by posterior expected counts."""
 
@@ -83,6 +122,7 @@ def estimate_confusion_matrices(
         num_option=num_option,
         edge_mask=edge_mask,
         prior_strength=prior_strength,
+        prior_mode=prior_mode,
     )
     return counts / counts.sum(dim=-1, keepdim=True).clamp_min(1e-12)
 
