@@ -4,7 +4,11 @@ from dataclasses import dataclass
 
 import torch
 
-from .disagreement import build_residual_matrix, estimate_confusion_matrices
+from .disagreement import (
+    build_residual_matrix,
+    confusion_posterior_parameters,
+    estimate_confusion_matrices,
+)
 
 
 @dataclass(frozen=True)
@@ -12,6 +16,20 @@ class MonteCarloResult:
     observed_statistic: float
     bootstrap_statistics: torch.Tensor
     p_value: float
+
+
+def _sample_dirichlet_rows(
+    concentration: torch.Tensor,
+    *,
+    generator: torch.Generator,
+) -> torch.Tensor:
+    """Sample independent Dirichlet rows with an explicit torch generator."""
+
+    gamma = torch._standard_gamma(concentration, generator=generator)
+    gamma = gamma.clamp_min(torch.finfo(concentration.dtype).tiny)
+    return gamma / gamma.sum(dim=-1, keepdim=True).clamp_min(
+        torch.finfo(concentration.dtype).tiny
+    )
 
 
 def conditional_monte_carlo_test(
@@ -22,6 +40,7 @@ def conditional_monte_carlo_test(
     audit_edge_mask: torch.Tensor,
     nuisance_edge_mask: torch.Tensor | None = None,
     refit_confusion: bool = False,
+    posterior_predictive_confusion: bool = False,
     prior_strength: float = 1.0,
     observed_statistic: float | None = None,
     num_bootstrap: int = 199,
@@ -30,26 +49,29 @@ def conditional_monte_carlo_test(
     probability_clip: float = 1e-4,
     variance_ridge: float = 1e-8,
 ) -> MonteCarloResult:
-    """Calibrate the residual statistic under a parametric predictive null.
+    """Calibrate the residual statistic under a predictive null.
 
-    With ``refit_confusion=False``, the observation mask, task posteriors and
-    confusion matrices remain fixed. This is the exact fitted-null Monte Carlo
-    test used by the initial CbR implementation.
+    Three confusion treatments are supported:
 
-    With ``refit_confusion=True``, each replicate simulates both nuisance and
-    audit labels, re-estimates the worker confusion matrices from the simulated
-    nuisance labels, and then recomputes the audit statistic. This parametric
-    refit bootstrap captures first-order uncertainty from estimating the
-    confusion matrices instead of treating a noisy plug-in estimate as known.
-    The task posterior remains fixed in both modes.
+    - fixed: hold the supplied confusion matrix fixed;
+    - refit: simulate nuisance labels and re-estimate confusion per replicate;
+    - posterior predictive: draw confusion rows from their Dirichlet posterior,
+      then compare observed and replicated audit discrepancies using the same
+      draw. The last mode propagates sparse multiclass nuisance uncertainty.
+
+    The item posterior remains fixed in all modes.
     """
 
     if num_bootstrap < 1:
         raise ValueError("num_bootstrap must be positive")
     if prior_strength <= 0:
         raise ValueError("prior_strength must be positive")
-    if refit_confusion and nuisance_edge_mask is None:
-        raise ValueError("nuisance_edge_mask is required when refit_confusion=True")
+    if refit_confusion and posterior_predictive_confusion:
+        raise ValueError("choose at most one confusion uncertainty mode")
+    if (refit_confusion or posterior_predictive_confusion) and nuisance_edge_mask is None:
+        raise ValueError(
+            "nuisance_edge_mask is required when confusion uncertainty is enabled"
+        )
 
     device = task_posterior.device
     triple = triple.to(device)
@@ -75,6 +97,18 @@ def conditional_monte_carlo_test(
     generator = torch.Generator(device=device.type)
     generator.manual_seed(seed)
     statistics = torch.empty(num_bootstrap, dtype=torch.float64)
+    paired_exceedances = 0
+
+    posterior_parameters = None
+    if posterior_predictive_confusion:
+        posterior_parameters = confusion_posterior_parameters(
+            triple,
+            task_posterior,
+            num_worker=confusion.shape[0],
+            num_option=confusion.shape[1],
+            edge_mask=nuisance_edge_mask,
+            prior_strength=prior_strength,
+        )
 
     simulation_edge_mask = audit_edge_mask
     if refit_confusion:
@@ -84,13 +118,20 @@ def conditional_monte_carlo_test(
     simulation_tasks = triple[2, simulation_edge_mask].long()
 
     for index in range(num_bootstrap):
+        replicate_confusion = confusion
+        if posterior_predictive_confusion:
+            replicate_confusion = _sample_dirichlet_rows(
+                posterior_parameters,
+                generator=generator,
+            )
+
         latent_truth = torch.multinomial(
             task_posterior,
             num_samples=1,
             replacement=True,
             generator=generator,
         ).squeeze(-1)
-        answer_probabilities = confusion[
+        answer_probabilities = replicate_confusion[
             simulation_workers,
             latent_truth[simulation_tasks],
         ]
@@ -104,7 +145,6 @@ def conditional_monte_carlo_test(
         simulated_triple = triple.clone()
         simulated_triple[1, simulation_edge_mask] = simulated_answers
 
-        replicate_confusion = confusion
         if refit_confusion:
             replicate_confusion = estimate_confusion_matrices(
                 simulated_triple,
@@ -115,7 +155,7 @@ def conditional_monte_carlo_test(
                 prior_strength=prior_strength,
             )
 
-        statistics[index] = build_residual_matrix(
+        replicate_statistic = build_residual_matrix(
             simulated_triple,
             task_posterior,
             replicate_confusion,
@@ -124,8 +164,26 @@ def conditional_monte_carlo_test(
             probability_clip=probability_clip,
             variance_ridge=variance_ridge,
         ).statistic
+        statistics[index] = replicate_statistic
 
-    exceedances = int((statistics >= observed_statistic - 1e-12).sum().item())
+        if posterior_predictive_confusion:
+            observed_draw_statistic = build_residual_matrix(
+                triple,
+                task_posterior,
+                replicate_confusion,
+                audit_edge_mask=audit_edge_mask,
+                min_pair_count=min_pair_count,
+                probability_clip=probability_clip,
+                variance_ridge=variance_ridge,
+            ).statistic
+            paired_exceedances += int(
+                replicate_statistic >= observed_draw_statistic - 1e-12
+            )
+
+    if posterior_predictive_confusion:
+        exceedances = paired_exceedances
+    else:
+        exceedances = int((statistics >= observed_statistic - 1e-12).sum().item())
     p_value = (1.0 + exceedances) / (num_bootstrap + 1.0)
     return MonteCarloResult(
         observed_statistic=float(observed_statistic),
