@@ -1,7 +1,7 @@
 dim: &dim 32
 device: &device cuda:0
 checkpoint_path: checkpoint.pt
-output_path: log/cbr_calibration_quick_posterior.json
+output_path: log/cbr_calibration_quick_hierarchical.json
 
 model:
   dim: *dim
@@ -15,7 +15,8 @@ cbr:
   context_fraction: 0.5
   min_context_workers: 1
   min_audit_workers: 2
-  prior_strength: 1.0
+  prior_strength: 10.0
+  confusion_prior_mode: global
   min_pair_count: 1
   probability_clip: 0.0001
   variance_ridge: 0.00000001
