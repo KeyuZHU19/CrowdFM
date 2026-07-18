@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import dlwheel
 import torch
@@ -21,6 +22,16 @@ def _load_checkpoint(path: str, device: str) -> dict:
     if not isinstance(checkpoint, dict):
         raise TypeError("checkpoint must be a dictionary")
     return checkpoint
+
+
+def _plain(value: Any) -> Any:
+    if hasattr(value, "to_dict"):
+        return _plain(value.to_dict())
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return value
 
 
 def _save_checkpoint(
@@ -75,11 +86,16 @@ def main() -> None:
     output_dir = Path(cfg.get("output_dir", "log/predictive_cfm"))
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / "config.json").open("w", encoding="utf-8") as handle:
-        json.dump(cfg.to_dict(), handle, indent=2)
+        json.dump(_plain(cfg), handle, indent=2)
 
     accumulation = int(cfg.gradient_accumulation_steps)
+    epochs = int(cfg.epochs)
+    if accumulation < 1 or epochs < 1:
+        raise ValueError("epochs and gradient_accumulation_steps must be positive")
+
     optimizer.zero_grad()
-    with tqdm(range(1, int(cfg.epochs) + 1), dynamic_ncols=True) as progress:
+    model.train()
+    with tqdm(range(1, epochs + 1), dynamic_ncols=True) as progress:
         for epoch in progress:
             batch = [data.to(cfg.device) for data in next(data_iterator)]
             losses = []
@@ -98,7 +114,8 @@ def main() -> None:
 
             loss = torch.stack(losses).mean() / accumulation
             loss.backward()
-            if epoch % accumulation == 0:
+            should_step = epoch % accumulation == 0 or epoch == epochs
+            if should_step:
                 optimizer.step()
                 optimizer.zero_grad()
                 model.mark_response_head_trained()
@@ -110,7 +127,7 @@ def main() -> None:
             }
             progress.set_postfix(metrics)
 
-            if epoch % int(cfg.save_interval) == 0 or epoch == int(cfg.epochs):
+            if epoch % int(cfg.save_interval) == 0 or epoch == epochs:
                 _save_checkpoint(
                     output_dir / f"{epoch}.pt",
                     epoch=epoch,
