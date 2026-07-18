@@ -22,7 +22,8 @@ class PredictiveMonteCarloResult:
 
 
 def conditional_predictive_test(
-    probabilities: torch.Tensor,
+    task_posterior: torch.Tensor,
+    emission_probabilities: torch.Tensor,
     observed_answers: torch.Tensor,
     query_workers: torch.Tensor,
     query_tasks: torch.Tensor,
@@ -34,28 +35,27 @@ def conditional_predictive_test(
     probability_clip: float = 1e-4,
     variance_ridge: float = 1e-8,
 ) -> PredictiveMonteCarloResult:
-    """Test a fixed held-out annotation predictive law.
+    """Test a fixed latent-truth annotation predictive law.
 
-    Conditional on the context graph and predicted probability rows, the null is
-
-        A_e independently follows Categorical(r_e)
-
-    for every held-out annotation edge e.  The observed labels and Monte Carlo
-    replicates are therefore exchangeable under the null.  Separate plus-one
-    Monte Carlo p-values are computed for marginal miscalibration and residual
-    worker dependence; a Bonferroni combination controls the joint test without
-    requiring the two statistics to share a numerical scale.
+    For each replicate, one shared latent truth is sampled per task from q_k.
+    Every held-out worker response is then sampled independently from its
+    edge-conditioned emission row given that shared truth.  This preserves the
+    within-task dependence implied by task-truth uncertainty.
     """
 
     if num_bootstrap < 1:
         raise ValueError("num_bootstrap must be positive")
-
-    probabilities = normalize_annotation_probabilities(
-        probabilities,
-        probability_clip=probability_clip,
+    task_posterior = normalize_annotation_probabilities(
+        task_posterior, probability_clip=probability_clip
     )
+    emission_probabilities = normalize_annotation_probabilities(
+        emission_probabilities, probability_clip=probability_clip
+    )
+    query_tasks = query_tasks.to(task_posterior.device, dtype=torch.long)
+
     observed = build_predictive_residual(
-        probabilities,
+        task_posterior,
+        emission_probabilities,
         observed_answers,
         query_workers,
         query_tasks,
@@ -65,20 +65,34 @@ def conditional_predictive_test(
         variance_ridge=variance_ridge,
     )
 
-    generator = torch.Generator(device=probabilities.device.type)
+    generator = torch.Generator(device=task_posterior.device.type)
     generator.manual_seed(seed)
     marginal_statistics = torch.empty(num_bootstrap, dtype=torch.float64)
     dependence_statistics = torch.empty(num_bootstrap, dtype=torch.float64)
+    edge_index = torch.arange(
+        emission_probabilities.shape[0], device=task_posterior.device
+    )
 
     for index in range(num_bootstrap):
+        latent_truth = torch.multinomial(
+            task_posterior,
+            num_samples=1,
+            replacement=True,
+            generator=generator,
+        ).squeeze(1)
+        response_rows = emission_probabilities[
+            edge_index,
+            latent_truth[query_tasks],
+        ]
         simulated_answers = torch.multinomial(
-            probabilities,
+            response_rows,
             num_samples=1,
             replacement=True,
             generator=generator,
         ).squeeze(1)
         replicate = build_predictive_residual(
-            probabilities,
+            task_posterior,
+            emission_probabilities,
             simulated_answers,
             query_workers,
             query_tasks,
@@ -90,21 +104,24 @@ def conditional_predictive_test(
         marginal_statistics[index] = replicate.marginal_statistic
         dependence_statistics[index] = replicate.dependence_statistic
 
-    marginal_exceedances = int(
-        (
-            marginal_statistics
-            >= observed.marginal_statistic - 1e-12
-        ).sum().item()
-    )
-    dependence_exceedances = int(
-        (
-            dependence_statistics
-            >= observed.dependence_statistic - 1e-12
-        ).sum().item()
-    )
-    denominator = num_bootstrap + 1.0
-    marginal_p_value = (1.0 + marginal_exceedances) / denominator
-    dependence_p_value = (1.0 + dependence_exceedances) / denominator
+    marginal_p_value = (
+        1.0
+        + int(
+            (
+                marginal_statistics
+                >= observed.marginal_statistic - 1e-12
+            ).sum().item()
+        )
+    ) / (num_bootstrap + 1.0)
+    dependence_p_value = (
+        1.0
+        + int(
+            (
+                dependence_statistics
+                >= observed.dependence_statistic - 1e-12
+            ).sum().item()
+        )
+    ) / (num_bootstrap + 1.0)
     joint_p_value = min(1.0, 2.0 * min(marginal_p_value, dependence_p_value))
 
     return PredictiveMonteCarloResult(
