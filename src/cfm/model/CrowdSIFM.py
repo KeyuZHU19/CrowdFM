@@ -9,7 +9,13 @@ from .CFM import CFM
 
 
 class GaussianMechanismEncoder(torch.nn.Module):
-    """Infer a permutation-invariant dataset-level crowd mechanism posterior."""
+    """Infer a permutation-invariant dataset-level crowd mechanism posterior.
+
+    In addition to pooled node/edge embeddings, the encoder explicitly summarizes
+    normalized worker and task degree distributions.  This preserves assignment
+    density and selection structure that can be washed out by normalized graph
+    attention.
+    """
 
     def __init__(self, dim: int, latent_dim: int):
         super().__init__()
@@ -20,11 +26,41 @@ class GaussianMechanismEncoder(torch.nn.Module):
             torch.nn.LeakyReLU(),
             torch.nn.Linear(2 * self.dim, self.dim),
         )
+        self.degree_encoder = torch.nn.Sequential(
+            torch.nn.Linear(8, self.dim),
+            torch.nn.LeakyReLU(),
+            torch.nn.Linear(self.dim, self.dim),
+        )
         self.posterior = torch.nn.Sequential(
-            torch.nn.Linear(4 * self.dim, 2 * self.dim),
+            torch.nn.Linear(5 * self.dim, 2 * self.dim),
             torch.nn.LeakyReLU(),
             torch.nn.Linear(2 * self.dim, 2 * self.latent_dim),
         )
+
+    @staticmethod
+    def _degree_statistics(
+        workers: torch.Tensor,
+        tasks: torch.Tensor,
+        num_worker: int,
+        num_task: int,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        worker_degree = torch.bincount(workers, minlength=num_worker).to(dtype)
+        task_degree = torch.bincount(tasks, minlength=num_task).to(dtype)
+        worker_degree = worker_degree / max(1, num_task)
+        task_degree = task_degree / max(1, num_worker)
+
+        def summarize(value: torch.Tensor) -> torch.Tensor:
+            return torch.stack(
+                [
+                    value.mean(),
+                    value.std(unbiased=False),
+                    value.min(),
+                    value.max(),
+                ]
+            )
+
+        return torch.cat([summarize(worker_degree), summarize(task_degree)], dim=0)
 
     def forward(
         self,
@@ -41,12 +77,21 @@ class GaussianMechanismEncoder(torch.nn.Module):
             dim=-1,
         )
         edge_summary = self.edge_encoder(edge_features).mean(dim=0)
+        degree_statistics = self._degree_statistics(
+            workers,
+            tasks,
+            z_worker.shape[0],
+            z_task.shape[0],
+            z_worker.dtype,
+        ).to(z_worker.device)
+        degree_summary = self.degree_encoder(degree_statistics)
         summary = torch.cat(
             [
                 z_worker.mean(dim=0),
                 z_task.mean(dim=0),
                 z_option.mean(dim=0),
                 edge_summary,
+                degree_summary,
             ],
             dim=-1,
         )
@@ -134,7 +179,7 @@ class CrowdSIFM(torch.nn.Module):
     * an edge-conditioned annotation emission law;
     * an annotation-assignment propensity head.
 
-    At deployment, network weights remain fixed.  Test-time adaptation updates only
+    At deployment, network weights remain fixed. Test-time adaptation updates only
     the low-dimensional mechanism posterior.
     """
 
