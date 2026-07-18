@@ -21,119 +21,106 @@ pytest -q
 
 ## Original CrowdFM usage
 
-### Evaluate
-
-By default, evaluation loads `checkpoint.pt`.
-
 ```bash
 python evaluate.py
-```
-
-Optional:
-
-```bash
-python evaluate.py checkpoint_path=<path>
-```
-
-Results are written to `log/perform.json` by default.
-
-### Train
-
-```bash
 python train.py --backup
 ```
 
-Optional:
+By default, evaluation loads `checkpoint.pt` and writes `log/perform.json`.
 
-```bash
-python train.py --backup --resume
-python train.py --backup name=<experiment_name>
+# CrowdSI-FM: crowd system identification and safe adaptation
+
+The research branch changes the problem from fixed zero-shot aggregation to
+
+```text
+universal aggregation initialization
++ deployment crowd-mechanism identification
++ evidence-gated latent adaptation.
 ```
 
-Training logs and checkpoints are saved under `log/<experiment_name>/` by default.
-
-## Residual-audited PredictiveCFM
-
-The research branch extends CrowdFM with a masked-annotation conditional emission head. For a hidden annotation edge `(i,k)`, the model outputs
+For a deployment annotation graph `G`, CrowdSI-FM infers a dataset-level mechanism posterior
 
 ```math
-P_{ik}(a\mid c,G_C)
-=\Pr(A_{ik}=a\mid Y_k=c,G_C,i,k),
+q_\phi(Z_{\mathcal D}\mid G),
 ```
 
-alongside CrowdFM's task posterior
+where `Z_D` is represented compositionally through learned mechanism primitives. Conditioned on a mechanism latent, the model predicts:
 
 ```math
-q_k(c)=\Pr(Y_k=c\mid G_C).
+q_\theta(Y_k\mid G,Z_{\mathcal D}),
 ```
 
-The deployment audit treats workers on the same task as sharing one unknown truth. Each Monte Carlo replicate first samples one `Y_k` per task and then samples held-out worker responses from their corresponding emission rows. It tests:
+```math
+P_\theta(A_{ik}=a\mid Y_k=c,G,Z_{\mathcal D},i,k),
+```
 
-- direction-sensitive marginal categorical residuals;
-- item-conditioned worker-pair disagreement residuals summarized by a two-sided spectral norm.
+and an annotation-assignment propensity
 
-This is a compatibility audit of the learned held-out annotation law. It is not proof that the aggregated task labels are correct.
+```math
+\Pr_\theta(O_{ik}=1\mid G,Z_{\mathcal D},i,k).
+```
 
-### Train the conditional emission head
+The network weights remain fixed at deployment. Only the low-dimensional mechanism posterior is updated from held-out annotations.
 
-Start from the official CrowdFM checkpoint and train masked-annotation prediction:
+## Evidence-gated adaptation
+
+Audit tasks are divided into two task-disjoint folds. A posterior adapted on fold A is evaluated on fold B, and vice versa. Because an entire task stays in one fold, the evidence calculation does not split workers that share the same latent task truth.
+
+For each direction, CrowdSI-FM compares the adapted mixture predictive likelihood with the fixed plug-in law at the amortized mechanism mean. The two likelihood ratios are averaged into an e-value. Adaptation is enabled only when
+
+```math
+E \geq 1/\alpha.
+```
+
+Under the fixed plug-in null and conditionally independent tasks, this controls erroneous adaptation by the standard e-value inequality. The guarantee concerns evidence against the base mechanism, not correctness of every aggregated truth.
+
+## Train CrowdSI-FM
 
 ```bash
-python train_predictive.py config=config/predictive_train.yaml
+python train_crowdsi.py config=config/crowdsi_train.yaml
 ```
 
-The default configuration freezes the original backbone and trains the new head. Joint fine-tuning is enabled with:
+The default simulator spans IRT, class-biased, coalition, assignment-biased, and mixed crowd mechanisms. Training jointly optimizes:
+
+- task-truth aggregation;
+- masked conditional annotation generation;
+- annotation-assignment prediction;
+- a Gaussian mechanism prior;
+- mechanism-posterior consistency across graph views.
+
+The official CrowdFM checkpoint initializes the backbone. The new system-identification modules must be trained before deployment use.
+
+## Evaluate and adapt
 
 ```bash
-python train_predictive.py \
-  config=config/predictive_train.yaml \
-  freeze_backbone=false \
-  predictive_training.truth_loss_weight=1.0
+python evaluate_crowdsi.py \
+  config=config/crowdsi_eval.yaml \
+  checkpoint_path=log/crowdsi/10000.pt
 ```
 
-For synthetic tasks with known truth, the selected emission row is supervised directly. Tasks without gold truth use the marginal response likelihood obtained by integrating over `q_k`.
+Each dataset result reports the e-value, whether adaptation was statistically supported, whether adaptation was used, and—when truth is available—the base/adapted accuracy.
 
-A trained checkpoint records a `response_head_trained` marker. The deployment audit refuses an untrained head.
+## Primary implementation
 
-### Run the deployment audit
+- `src/cfm/model/CrowdSIFM.py`: mechanism encoder, compositional basis, adapted truth head, conditional emission head, and assignment head;
+- `src/cfm/data/crowdsi_simulator.py`: mechanism-diverse synthetic worlds;
+- `src/cfm/si/likelihood.py`: shared-truth joint response likelihood;
+- `src/cfm/si/split.py`: task-disjoint cross-fitting;
+- `src/cfm/si/adaptation.py`: latent Bayesian adaptation and e-value gating;
+- `src/cfm/si/training.py`: multi-objective pretraining;
+- `src/cfm/si/pipeline.py`: evidence-gated deployment aggregation;
+- `train_crowdsi.py` and `evaluate_crowdsi.py`: entrypoints.
 
-```bash
-python evaluate_predictive_audit.py \
-  config=config/predictive_audit.yaml \
-  checkpoint_path=log/predictive_cfm/10000.pt
-```
+## Earlier methods retained as ablations
 
-Each dataset result includes:
-
-- marginal categorical p-value;
-- worker-dependence p-value;
-- Bonferroni joint p-value;
-- reject/defer decision;
-- marginal and spectral statistics;
-- audit/context support counts.
-
-With the Bonferroni combination, the smallest attainable joint p-value is `2/(B+1)`. The pipeline rejects a bootstrap configuration that cannot reach the requested `alpha`.
-
-### Main implementation
-
-- `src/cfm/model/PredictiveCFM.py`: variable-K conditional emission head;
-- `src/cfm/audit/predictive_split.py`: leakage-free context/audit split;
-- `src/cfm/audit/predictive.py`: marginal and item-conditioned disagreement residuals;
-- `src/cfm/audit/predictive_bootstrap.py`: shared-truth conditional Monte Carlo test;
-- `src/cfm/audit/predictive_pipeline.py`: deployment pipeline;
-- `src/cfm/audit/predictive_training.py`: known- and latent-truth training objectives.
-
-## Historical confusion-based CbR
-
-The earlier branch code combined CrowdFM task posteriors with a deployment-fitted worker confusion matrix. Full calibration experiments showed that this external nuisance bridge remained strongly anti-conservative in sparse multiclass settings. The implementation and runners are retained only to reproduce that negative result; they are not the recommended audit.
+`PredictiveCFM` is retained as a fixed-mechanism masked-annotation audit baseline. The still earlier confusion-estimator CbR path is retained only to reproduce its negative sparse-multiclass calibration results. Neither is the primary method.
 
 ## Documentation
 
-- `docs/IDEA.md`: formal research problem, method, guarantees, and limitations;
-- `docs/CBR_SPEC.md`: implementation contract and formulas;
-- `docs/CBR_IDEA.md`: concise method summary;
-- `docs/CALIBRATION_RESULTS.md`: confusion-estimator failure history and method pivot;
-- `docs/EXPERIMENT_PLAN.md`: revised experimental plan.
+- `docs/IDEA.md`: formal CrowdSI-FM research problem and method;
+- `docs/CROWDSI_SPEC.md`: implementation and mathematical contract;
+- `docs/EXPERIMENT_PLAN.md`: mechanism-generalization and safe-adaptation experiments;
+- `docs/CALIBRATION_RESULTS.md`: history of the retired confusion-based approach.
 
 ## Citation
 
