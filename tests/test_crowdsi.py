@@ -179,12 +179,13 @@ def test_crowdsi_pipeline_and_mechanism_diverse_simulator():
         num_task_range=(8, 8),
         num_option_range=(3, 3),
         num_answer_each_task_range=(4, 4),
+        min_answers_per_task=3,
         mechanism_families=["mixed"],
     )
     simulated = simulator.generate()
     assert simulated.mechanism_family_name == "mixed"
     assert simulated.mechanism_target.shape == (8,)
-    assert torch.all(simulated.task_degree >= 2)
+    assert torch.all(simulated.task_degree >= 3)
 
     data = _toy_data()
     model = _model()
