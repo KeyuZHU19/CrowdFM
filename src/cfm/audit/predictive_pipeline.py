@@ -39,21 +39,7 @@ def run_predictive_audit(
     config: PredictiveAuditConfig | None = None,
     seed: int = 0,
 ) -> dict[str, Any]:
-    """Audit a model's conditional law for held-out worker responses.
-
-    Required model interface::
-
-        output = model(
-            context_data,
-            query_workers=query_workers,
-            query_tasks=query_tasks,
-        )
-        output["hat_annotation_option"]  # [num_audit_edges, num_options]
-
-    The response logits must be trained by masked-annotation prediction. The
-    audit never estimates a post-hoc worker confusion matrix and never exposes
-    held-out answers to the model.
-    """
+    """Audit q_k and edge-conditioned annotation emissions on held-out labels."""
 
     cfg = config or PredictiveAuditConfig()
     if not 0.0 < cfg.alpha < 1.0:
@@ -69,7 +55,7 @@ def run_predictive_audit(
         )
     if cfg.require_trained_response_head and _response_head_is_untrained(model):
         raise RuntimeError(
-            "the masked-annotation response head is marked untrained; train it "
+            "the conditional annotation head is marked untrained; train it "
             "before using its probabilities for a deployment audit"
         )
 
@@ -97,21 +83,27 @@ def run_predictive_audit(
             query_workers=query_workers,
             query_tasks=query_tasks,
         )
-    if "hat_annotation_option" not in output:
+    if "hat_task_option" not in output:
+        raise KeyError("predictive audit requires output['hat_task_option']")
+    if "hat_annotation_given_truth" not in output:
         raise KeyError(
-            "predictive audit requires output['hat_annotation_option']; use a "
-            "trained PredictiveCFM or another model implementing this interface"
+            "predictive audit requires output['hat_annotation_given_truth']; use "
+            "a trained PredictiveCFM or compatible model"
         )
-    annotation_logits = output["hat_annotation_option"]
-    if annotation_logits.shape != (audit_indices.numel(), data.num_option):
+
+    task_posterior = torch.softmax(output["hat_task_option"], dim=-1)
+    emission_logits = output["hat_annotation_given_truth"]
+    expected_shape = (audit_indices.numel(), data.num_option, data.num_option)
+    if emission_logits.shape != expected_shape:
         raise ValueError(
-            "hat_annotation_option must have shape "
-            f"[{audit_indices.numel()}, {data.num_option}]"
+            "hat_annotation_given_truth must have shape "
+            f"{expected_shape}, got {tuple(emission_logits.shape)}"
         )
-    probabilities = torch.softmax(annotation_logits, dim=-1)
+    emission_probabilities = torch.softmax(emission_logits, dim=-1)
 
     calibration = conditional_predictive_test(
-        probabilities,
+        task_posterior,
+        emission_probabilities,
         observed_answers,
         query_workers,
         query_tasks,
@@ -140,12 +132,9 @@ def run_predictive_audit(
         "num_supported_pairs": supported_pairs,
         "num_audit_edges": int(audit_indices.numel()),
         "num_context_edges": int(split.context_edge_mask.sum().item()),
-        "annotation_probabilities": residual.probabilities,
-        "task_posterior": (
-            torch.softmax(output["hat_task_option"], dim=-1)
-            if "hat_task_option" in output
-            else None
-        ),
+        "task_posterior": residual.task_posterior,
+        "emission_probabilities": residual.emission_probabilities,
+        "marginal_response_probabilities": residual.marginal_probabilities,
         "residual": residual,
         "split": split,
         "bootstrap": calibration,
