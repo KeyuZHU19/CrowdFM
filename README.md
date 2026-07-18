@@ -117,6 +117,7 @@ Each dataset result reports the e-value, whether adaptation was statistically su
 
 ## Documentation
 
+- `docs/CROWDSI_AUTORESEARCH_PLAN.md`: single source of truth for the full idea, theory scope, implementation roadmap, experiment matrix, failure handling, AAAI criteria, and autoregressive code-agent protocol;
 - `docs/IDEA.md`: formal CrowdSI-FM research problem and method;
 - `docs/CROWDSI_SPEC.md`: implementation and mathematical contract;
 - `docs/EXPERIMENT_PLAN.md`: mechanism-generalization and safe-adaptation experiments;
