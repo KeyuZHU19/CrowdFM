@@ -30,12 +30,11 @@ def predictive_training_loss(
     config: PredictiveTrainingConfig | None = None,
     seed: int = 0,
 ) -> dict[str, Any]:
-    """Compute the joint truth-aggregation and masked-response objective.
+    """Joint task-truth and masked conditional-emission objective.
 
-    Audit edges are removed from the graph before the forward pass.  Their labels
-    supervise ``hat_annotation_option``.  Synthetic task truth, when available,
-    continues to supervise ``hat_task_option``.  Real datasets without gold task
-    labels can set ``truth_loss_weight=0`` and train the response objective alone.
+    For synthetic tasks with known truth, the held-out response supervises the
+    emission row corresponding to that truth.  For tasks without gold truth, the
+    response loss marginalizes the emission rows using the model task posterior.
     """
 
     cfg = config or PredictiveTrainingConfig()
@@ -65,19 +64,44 @@ def predictive_training_loss(
         query_workers=query_workers,
         query_tasks=query_tasks,
     )
-    if "hat_annotation_option" not in output:
-        raise KeyError("model must output hat_annotation_option for masked edges")
-    annotation_logits = output["hat_annotation_option"]
-    annotation_loss = F.cross_entropy(
-        annotation_logits,
-        observed_answers.to(annotation_logits.device),
+    if "hat_annotation_given_truth" not in output:
+        raise KeyError("model must output hat_annotation_given_truth for masked edges")
+    emission_logits = output["hat_annotation_given_truth"]
+    task_logits = output["hat_task_option"]
+    device = emission_logits.device
+    query_tasks = query_tasks.to(device)
+    observed_answers = observed_answers.to(device)
+
+    emission_log_probabilities = F.log_softmax(emission_logits, dim=-1)
+    answer_log_probability_by_truth = emission_log_probabilities.gather(
+        2,
+        observed_answers[:, None, None].expand(-1, emission_logits.shape[1], 1),
+    ).squeeze(2)
+    task_log_posterior = F.log_softmax(task_logits[query_tasks], dim=-1)
+    edge_losses = -torch.logsumexp(
+        task_log_posterior + answer_log_probability_by_truth,
+        dim=-1,
     )
 
-    truth_loss = annotation_loss.new_zeros(())
     task_y = getattr(data, "task_y", None)
+    if isinstance(task_y, torch.Tensor):
+        task_y = task_y.to(device)
+        edge_truth = task_y[query_tasks]
+        known = edge_truth != -1
+        if torch.any(known):
+            selected_rows = emission_logits[
+                torch.nonzero(known, as_tuple=False).flatten(),
+                edge_truth[known],
+            ]
+            edge_losses[known] = F.cross_entropy(
+                selected_rows,
+                observed_answers[known],
+                reduction="none",
+            )
+    annotation_loss = edge_losses.mean()
+
+    truth_loss = annotation_loss.new_zeros(())
     if cfg.truth_loss_weight > 0 and isinstance(task_y, torch.Tensor):
-        task_logits = output["hat_task_option"]
-        task_y = task_y.to(task_logits.device)
         valid = task_y != -1
         if torch.any(valid):
             truth_loss = F.cross_entropy(task_logits[valid], task_y[valid])
