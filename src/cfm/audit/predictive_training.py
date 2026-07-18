@@ -33,7 +33,7 @@ def predictive_training_loss(
     """Joint task-truth and masked conditional-emission objective.
 
     For synthetic tasks with known truth, the held-out response supervises the
-    emission row corresponding to that truth.  For tasks without gold truth, the
+    emission row corresponding to that truth. For tasks without gold truth, the
     response loss marginalizes the emission rows using the model task posterior.
     """
 
@@ -78,26 +78,28 @@ def predictive_training_loss(
         observed_answers[:, None, None].expand(-1, emission_logits.shape[1], 1),
     ).squeeze(2)
     task_log_posterior = F.log_softmax(task_logits[query_tasks], dim=-1)
-    edge_losses = -torch.logsumexp(
+    marginal_edge_losses = -torch.logsumexp(
         task_log_posterior + answer_log_probability_by_truth,
         dim=-1,
     )
 
+    edge_losses = marginal_edge_losses
     task_y = getattr(data, "task_y", None)
     if isinstance(task_y, torch.Tensor):
         task_y = task_y.to(device)
         edge_truth = task_y[query_tasks]
         known = edge_truth != -1
-        if torch.any(known):
-            selected_rows = emission_logits[
-                torch.nonzero(known, as_tuple=False).flatten(),
-                edge_truth[known],
-            ]
-            edge_losses[known] = F.cross_entropy(
-                selected_rows,
-                observed_answers[known],
-                reduction="none",
-            )
+        safe_truth = edge_truth.clamp_min(0)
+        selected_rows = emission_logits[
+            torch.arange(emission_logits.shape[0], device=device),
+            safe_truth,
+        ]
+        supervised_edge_losses = F.cross_entropy(
+            selected_rows,
+            observed_answers,
+            reduction="none",
+        )
+        edge_losses = torch.where(known, supervised_edge_losses, marginal_edge_losses)
     annotation_loss = edge_losses.mean()
 
     truth_loss = annotation_loss.new_zeros(())
