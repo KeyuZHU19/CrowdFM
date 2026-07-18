@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from cfm.audit.predictive import build_predictive_residual
@@ -184,6 +185,23 @@ def test_predictive_training_loss_backpropagates_to_response_head():
     assert torch.isfinite(result["loss"])
 
 
+def test_predictive_pipeline_rejects_insufficient_mc_resolution():
+    data = _toy_data()
+    model = PredictiveCFM(dim=4, layer=1, head=1, dropout=0.0, device="cpu")
+    model.mark_response_head_trained()
+    with pytest.raises(ValueError, match="minimum attainable p-value"):
+        run_predictive_audit(
+            model,
+            data,
+            config=PredictiveAuditConfig(
+                context_fraction=1 / 3,
+                num_bootstrap=9,
+                alpha=0.05,
+            ),
+            seed=11,
+        )
+
+
 def test_full_predictive_pipeline_runs_with_trained_head_marker():
     data = _toy_data()
     model = PredictiveCFM(dim=4, layer=1, head=1, dropout=0.0, device="cpu")
@@ -194,10 +212,12 @@ def test_full_predictive_pipeline_runs_with_trained_head_marker():
         config=PredictiveAuditConfig(
             context_fraction=1 / 3,
             num_bootstrap=9,
+            alpha=0.2,
             require_trained_response_head=True,
         ),
         seed=11,
     )
     assert 0.0 < result["p_value"] <= 1.0
+    assert result["minimum_joint_p_value"] == pytest.approx(0.2)
     assert result["num_audit_edges"] > 0
     assert result["annotation_probabilities"].shape[1] == data.num_option
