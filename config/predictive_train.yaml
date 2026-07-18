@@ -33,7 +33,7 @@ predictive_training:
   min_context_workers: 1
   min_audit_workers: 2
   min_worker_context_edges: 0
-  truth_loss_weight: 1.0
+  truth_loss_weight: 0.0
   annotation_loss_weight: 1.0
 
 path:
