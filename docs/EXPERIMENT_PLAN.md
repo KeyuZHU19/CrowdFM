@@ -1,205 +1,212 @@
-# AAAI Experiment Plan for CbR
+# Experiment Plan: Residual-Audited Crowd Foundation Models
 
-This file is the live execution plan. Update status, commands, seeds, failures, and result paths as experiments are run.
+This is the live plan for the revised masked-annotation predictive audit.  The confusion-based experiments are historical diagnostics and must not be continued as the primary method.
 
 ## Paper claims
 
 | ID | Claim | Required evidence |
 |---|---|---|
-| C1 | The conditional audit controls false rejection under the fitted null. | Nominal-vs-empirical rejection curves and p-value histograms. |
-| C2 | CbR detects structured noise-model misspecification. | Power/AUROC curves over severity, density, and coalition size. |
-| C3 | Residual routing improves selective aggregation risk. | Risk-coverage curves, AURC, and oracle-router gap. |
-| C4 | Cross-fitting and item conditioning are necessary. | Leakage and global-prior ablations. |
-| C5 | The detector remains useful on realistic sparse assignment graphs. | Real-mask semi-synthetic experiments. |
+| C1 | A crowd foundation model can learn a transferable conditional distribution for held-out worker responses. | Masked-annotation NLL, Brier score, and calibration on unseen worlds and real matrices. |
+| C2 | Conditional Monte Carlo controls false rejection when the learned response law is calibrated. | Nominal-vs-empirical rejection curves and p-value histograms. |
+| C3 | Marginal and spectral residuals detect complementary deployment shifts. | Power curves by shift family and severity; component ablations. |
+| C4 | Cross-fitting is necessary and worker residual structure localizes coherent failures. | Leakage ablation and coalition-localization AUC. |
+| C5 | Audit-based defer improves selective aggregation rather than merely detecting synthetic OOD labels. | Risk--coverage, AURC, accepted-set accuracy, and oracle-router gap. |
 
-## Phase 0 — Infrastructure
+## Phase 0 — Implementation and local validation
 
-- [x] Cross-fit split implementation.
-- [x] Posterior-expected confusion estimator.
-- [x] Item-conditioned predicted disagreement.
-- [x] Signed standardized residual and two-sided spectral statistic.
-- [x] Fixed-nuisance conditional Monte Carlo test.
-- [x] CrowdFM evaluation entrypoint.
-- [x] Local unit-test smoke validation.
-- [x] Official-checkpoint baseline evaluation over all 16 available dataset directories.
-- [x] One-seed real-data CbR smoke audit with `B=99`.
-- [x] YAML calibration configuration and incremental JSON result schema.
-- [ ] Add worker nuisance-support and posterior-quality diagnostics.
-- [ ] Repeated cross-fitting and result aggregation.
-- [ ] GPU/CPU profiling.
+- [x] Add `PredictiveCFM` with a K-invariant masked-annotation response head.
+- [x] Add leakage-free context/audit edge splitting.
+- [x] Add marginal categorical log-score residual.
+- [x] Add signed worker-pair residual covariance and two-sided operator norm.
+- [x] Add exact conditional Monte Carlo component tests and Bonferroni joint p-value.
+- [x] Add masked-response plus task-truth training objective.
+- [x] Add training and evaluation entrypoints.
+- [x] Preserve the old confusion implementation as a reproducible negative control.
+- [ ] Pull the branch and run the complete unit-test suite.
+- [ ] Run a one-batch training smoke test and verify that response-head gradients and checkpoint markers are correct.
+- [ ] Add checkpoint-resume support to `train_predictive.py` if long runs require it.
 
-## Phase 1 — Null calibration
-
-Use eight representative synthetic configurations spanning:
-
-- workers: 20, 50, 100;
-- items: 200, 500, 1000;
-- classes: 2, 5, 10;
-- labels per item: 3, 5, 10;
-- balanced and imbalanced class priors.
-
-Run 300 independent worlds per configuration. Report empirical rejection at alpha in `{0.01, 0.05, 0.10, 0.20}`. Use `B=199` during development and `B=999` for final calibration figures.
-
-### Calibration decomposition
-
-Before running the full fitted pipeline, separate statistical calibration from nuisance-estimation error using four variants on the same synthetic worlds and the same cross-fit split:
-
-1. **Oracle posterior + oracle confusion**: `q_k` is one-hot ground truth and `P_i` is the generating confusion matrix. This isolates the residual statistic and Monte Carlo test.
-2. **CrowdFM posterior + oracle confusion**: isolates posterior error.
-3. **Oracle posterior + estimated confusion**: isolates confusion-estimation error.
-4. **CrowdFM posterior + estimated confusion**: evaluates the complete deployment pipeline.
-
-Do not interpret real-data rejection rates until variant 1 is calibrated and the gap between variants 1--4 is understood.
-
-First run the quick integration check:
+Commands:
 
 ```bash
-python run_cbr_calibration.py config=config/cbr_calibration_quick.yaml
+git pull --ff-only origin agent/cbr-audit-core
+pytest -q
+python train_predictive.py config=config/predictive_train.yaml epochs=2 batch_size=2 output_dir=log/predictive_smoke
 ```
 
-Then run the development calibration sweep:
+## Phase 1 — Response model validation
 
-```bash
-python run_cbr_calibration.py config=config/cbr_calibration.yaml
-```
+The audit is meaningful only if `r_ik` is a useful held-out response predictor.  Before any OOD experiment, compare:
 
-The quick configuration runs two small settings, two worlds per setting, all four variants, and `B=19`. The development configuration runs four settings, 20 worlds per setting, all four variants, and `B=99`. Results are written incrementally to `log/cbr_calibration_quick.json` and `log/cbr_calibration_smoke.json`.
+1. option-frequency baseline;
+2. worker empirical-frequency baseline;
+3. Dawid--Skene posterior predictive;
+4. 3PL/GLAD-style low-dimensional predictor;
+5. frozen CrowdFM backbone plus trained response head;
+6. jointly fine-tuned PredictiveCFM.
 
-- [x] Implement fixed-degree Dawid--Skene synthetic null generator with known truth and worker confusion matrices.
-- [x] Implement the four-way oracle/fitted calibration decomposition.
-- [x] Add quick/development configurations, incremental runner, summary statistics, and synthetic unit tests.
-- [ ] Run quick integration calibration.
-- [ ] Run smoke calibration, 20 worlds/configuration.
-- [ ] Inspect rejection rates and posterior/confusion errors for all four variants.
-- [ ] Run final calibration, 300 worlds/configuration.
-- [ ] Produce calibration plot and p-value histogram.
+Metrics:
 
-Decision rule after the smoke run:
+- annotation NLL;
+- Brier score;
+- top-label accuracy;
+- expected calibration error;
+- reliability diagrams stratified by `K`, worker support, and task degree;
+- worker cold-start and low-support performance.
 
-- Variant 1 inflated: debug residual/bootstrap implementation before any model changes.
-- Variant 2 inflated relative to 1: improve or recalibrate the CrowdFM item posterior/context split.
-- Variant 3 inflated relative to 1: replace the provisional expected-count confusion estimator with hierarchical shrinkage or a learned head.
-- Only variant 4 inflated: study interaction between posterior and confusion errors and repeated cross-fitting.
+Training regimes:
 
-## Phase 2 — OOD power
+- synthetic-only masked-response training;
+- synthetic task-truth plus masked-response multi-task training;
+- synthetic pretraining plus self-supervised real-matrix response training;
+- frozen backbone versus joint fine-tuning.
 
-Four primary alternatives, five severity levels, 100 worlds per point:
+Decision rule: do not interpret audit p-values until the response predictor outperforms unconditional and worker-frequency baselines and has acceptable in-prior calibration.
 
-1. Class-conditioned confusion outside the pretraining range.
-2. Conditional worker coalition dependence.
-3. Worker temporal/block drift.
-4. Item-type-dependent worker expertise.
+## Phase 2 — Null calibration
 
-Report AUROC, AUPRC, TPR at 5% FPR, and power at alpha=0.05. Include an observationally equivalent coalition as a documented detectability-limit negative control.
+Use unseen worlds sampled from the same declared pretraining distribution.  Evaluate at `alpha in {0.01, 0.05, 0.10}` over strata of:
 
-- [ ] Implement OOD injectors.
-- [ ] Run conditional-coalition dependence first as the initial power sanity check.
-- [ ] Run severity sweeps.
-- [ ] Run density and coalition-size sweeps.
-- [ ] Produce power curves.
+- `M in {20, 50, 100}`;
+- `N in {200, 500, 1000}`;
+- `K in {2, 5, 10, 20}`;
+- labels per task;
+- class imbalance;
+- worker support and task difficulty.
 
-## Phase 3 — Real-mask semi-synthetic
+Report:
 
-Preserve the worker-item masks of six representative CrowdFM datasets. Initial targets:
+- marginal rejection;
+- dependence rejection;
+- Bonferroni joint rejection;
+- p-value histograms;
+- calibration error and confidence intervals.
 
-- LabelMe
-- RTE
-- Trec
-- Dog
-- Bird
-- ZC_all
+Use `B=199` for development and `B=999` for final figures.  A badly calibrated learned response law is a model failure; Monte Carlo is not expected to repair it.
 
-For each mask, run four OOD families, three severity levels, and 50 worlds. Verify exact available dataset directory names before launching.
+Required controls:
 
-- [ ] Implement mask extraction and relabeling.
-- [ ] Run 6 x 4 x 3 x 50 worlds.
-- [ ] Compare item-conditioned CbR against global-prior residuals.
+- oracle response probabilities from the generator;
+- learned response probabilities;
+- labels exposed to the model as a deliberate leakage control;
+- shuffled query-worker identities;
+- untrained response head, which must fail or be refused by the pipeline.
 
-## Phase 4 — Real benchmarks
+## Phase 3 — Structured deployment shift
 
-Run all CrowdFM datasets with five cross-fit seeds. Main baselines:
+Hold out entire mechanisms, not merely parameter values, from response-head training:
 
-- Majority vote
-- Dawid-Skene
-- GLAD
-- MACE
-- DGN
-- CrowdFM
-- CrowdFM + CbR selective routing
+1. class-conditioned error directions;
+2. stronger task-difficulty dependence;
+3. worker--worker coalition dependence;
+4. temporal worker drift;
+5. non-random worker assignment;
+6. Sybil workers and targeted label attacks;
+7. class or option semantics absent from training.
 
-Report all datasets in the appendix and eight representative datasets in the main paper. Real data have no definitive OOD oracle; report aggregation accuracy, audit p-value, rejection frequency, runtime, and case studies without claiming real-data OOD AUROC.
+For each family, run severity, density, worker-support, and coalition-size sweeps.  Report:
 
-- [ ] Audit all available datasets with the official checkpoint over five cross-fit seeds.
-- [ ] Report rejection frequency across splits rather than treating one split as ground truth.
-- [ ] Integrate classical baselines.
-- [ ] Implement pre-specified fallback routing.
-- [ ] Produce real-benchmark table.
+- AUROC/AUPRC;
+- power at `alpha=0.05`;
+- marginal versus dependence component power;
+- leading-eigenvector worker localization;
+- annotation-prediction degradation;
+- aggregation-accuracy degradation.
 
-## Phase 5 — Selective risk and ablations
+Include an observationally equivalent alternative as a negative control.  The paper must state that such a process is information-theoretically invisible to the checked response law.
 
-Required ablations:
+## Phase 4 — Real-mask semi-synthetic evaluation
+
+Preserve real worker--task masks and inject controlled responses.  Candidate datasets include LabelMe, RTE, Trec, Dog, Bird, and ZC_all after verifying exact directory names.
+
+This phase separates shift detection from unrealistic dense synthetic overlap.  Evaluate every method under the same mask and known injected mechanism.
+
+- [ ] Implement mask extraction.
+- [ ] Implement response sampling from in-prior and held-out mechanisms.
+- [ ] Run at least six masks, four mechanisms, and multiple severities.
+- [ ] Report power and worker localization with mask-specific confidence intervals.
+
+## Phase 5 — Real benchmarks
+
+Train the response head without using deployment gold task labels.  On real datasets report:
+
+- CrowdFM aggregation accuracy where gold truth is available for evaluation only;
+- masked-annotation NLL/Brier;
+- marginal, dependence, and joint p-values;
+- rejection stability across cross-fit seeds;
+- runtime and bootstrap cost;
+- qualitative residual-eigenvector case studies.
+
+Do not label a real matrix “OOD” solely because it is rejected.  The statistically correct interpretation is incompatibility with the learned response law.
+
+## Phase 6 — Selective aggregation
+
+Compare the audit gate against:
+
+- CrowdFM entropy and margin;
+- split-view or worker-subsampling instability;
+- latent embedding OOD scores;
+- response NLL without the dependence statistic;
+- dependence statistic without marginal calibration;
+- majority-vote and classical-model diagnostics.
+
+Fallbacks must be pre-specified and evaluated rather than called safe by assumption.  Report:
+
+- coverage;
+- accepted-set risk/accuracy;
+- AURC;
+- accuracy at fixed coverage;
+- fallback penalty on false rejections;
+- gain on detected failure families;
+- oracle-router gap.
+
+## Required ablations
 
 - no cross-fitting;
-- global class prior instead of item posterior;
-- largest positive eigenvalue only;
-- Frobenius norm;
-- maximum entry statistic;
-- global synthetic threshold;
-- CrowdFM entropy/margin confidence;
-- hierarchical/global-confusion shrinkage versus a uniform Dirichlet prior;
-- worker support thresholds for nuisance confusion estimation.
+- response head trained with and without task-truth loss;
+- frozen versus fine-tuned backbone;
+- binary disagreement residual versus full categorical residual;
+- marginal-only, dependence-only, and joint test;
+- Frobenius norm, maximum entry, and one-sided eigenvalue instead of the two-sided operator norm;
+- worker-context support threshold;
+- audit/context fraction;
+- Monte Carlo count `B in {99,199,499,999}`.
 
-Report risk-coverage curves, AURC, accuracy at fixed coverage, and router regret relative to an oracle router.
-
-- [ ] Implement routing metrics.
-- [ ] Run core ablations.
-- [ ] Run bootstrap count sensitivity `B in {99,199,499,999}`.
-
-## Seeds and reproducibility
+## Reproducibility
 
 Training seeds: `42, 43, 44`.
-Cross-fit/evaluation seeds: `42, 43, 44, 45, 46`.
-Every output JSON must record the Git commit, full configuration, dataset, seed, runtime, and result path.
 
-## Compute allocation
+Evaluation/cross-fit seeds: `42, 43, 44, 45, 46`.
 
-Use independent jobs rather than distributed training:
+Every output must record:
 
-- 4090-1/2/3: model or head seeds;
-- 4090-4: real-data evaluation and development;
-- V100S-1: null calibration;
-- V100S-2: OOD power;
-- V100S-3: real-mask semi-synthetic.
+- Git commit;
+- full model/training/audit configuration;
+- checkpoint path;
+- dataset/world seed;
+- split seed;
+- runtime;
+- response metrics;
+- component and joint p-values.
 
-One 24 GB GPU is sufficient for an individual job. Residual construction and bootstrap can run on CPU or GPU; benchmark both before the final sweep.
+## Historical execution log
 
-## Execution log
+### Official CrowdFM baseline
 
-### 2026-07-16 PT — Initial local validation
-
-- Command: `pytest -q`
-- Result before the seed-parser regression test was added: `5 passed in 1.57s`.
-- Command: `python evaluate.py checkpoint_path=checkpoint.pt output_path=log/crowdfm_baseline.json`
-- Evaluated all 16 available dataset directories successfully.
+- Evaluated all 16 available dataset directories.
 - Mean task accuracy: `0.8229134873`.
 - Mean reported per-dataset runtime: `0.0849569976` seconds.
-- Baseline output: `log/crowdfm_baseline.json`.
-- `evaluate_cbr.py` exposed a CLI parsing issue because dlwheel preserved `seeds=[42]` as a string. The entrypoint now normalizes scalar, sequence, JSON-string, and comma-separated seed specifications.
 
-### 2026-07-16 PT — One-seed real-data CbR smoke audit
+### Confusion-based smoke audit
 
-- Command: `python evaluate_cbr.py checkpoint_path=checkpoint.pt seeds=42 cbr.num_bootstrap=99 cbr.alpha=0.05 output_path=log/cbr_smoke.json`.
-- All 16 datasets completed and had nonzero audit edges and supported worker pairs.
-- Rejected 14/16 datasets at `alpha=0.05` (`87.5%`). Only RTE (`p=0.23`) and SP (`p=0.90`) were not rejected.
-- Twelve datasets attained the minimum possible p-value `1/(B+1)=0.01`; Bird had `p=0.04` and PosSent had `p=0.02`.
-- This is a diagnostic of the current fitted predictive null, not evidence that 14 real datasets are truly OOD. The provisional null combines CrowdFM posteriors with a stationary conditionally independent per-worker confusion model estimated by posterior expected counts; the high rejection rate indicates that this null and/or its nuisance estimates are too restrictive for most real datasets.
-- Raw spectral statistics are not directly comparable across datasets; instance-conditional bootstrap p-values are the relevant quantities.
+- Rejected 14/16 real datasets at `alpha=0.05`.
+- This was not evidence that 14 datasets were truly OOD; it showed that the manufactured stationary confusion null was too restrictive or poorly estimated.
 
-### 2026-07-16 PT — Four-way calibration implementation
+### Confusion calibration decomposition
 
-- Added `src/cfm/audit/synthetic.py` with deterministic fixed-degree Dawid--Skene worlds and known confusion matrices.
-- Added `src/cfm/audit/calibration.py`, `run_cbr_calibration.py`, `config/cbr_calibration_quick.yaml`, and `config/cbr_calibration.yaml`.
-- All four variants reuse the same world, cross-fit split, and original CrowdFM node features.
-- Results are checkpointed after every completed world and include posterior accuracy, confusion MAE, p-values, rejection decisions, runtime, and Git commit.
-- Added two synthetic tests; isolated local execution of the new tests returned `2 passed`.
-- Next local validation: pull the branch, run the full suite (expected `8 passed`), then launch the quick calibration before the 20-world sweep.
+- Oracle response law produced approximately nominal rejection.
+- Estimated response law produced `70--74%` rejection in the first full sweep.
+- Hierarchical shrinkage reduced but did not solve inflation: estimated-confusion rejection remained `28.75%` with CrowdFM `q` and `51.25%` with oracle `q` aggregated over 80 worlds.
+- Support sweeps reduced disagreement MAE but did not establish a clean audit because nuisance estimation and audit power grew together.
+
+These results motivate the current direct masked-annotation response model.  See `CALIBRATION_RESULTS.md` for details.
