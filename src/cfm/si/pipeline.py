@@ -52,7 +52,14 @@ def run_crowdsi(
     config: CrowdSIPipelineConfig | None = None,
     seed: int = 0,
 ) -> dict[str, Any]:
-    """Run zero-shot aggregation, evidence testing, and safe latent adaptation."""
+    """Run zero-shot aggregation, evidence testing, and safe latent adaptation.
+
+    Three predictions are returned separately:
+
+    * original CrowdFM backbone output;
+    * CrowdSI truth head at the amortized mechanism (zero-shot);
+    * CrowdSI truth head at the evidence-selected mechanism.
+    """
 
     cfg = config or CrowdSIPipelineConfig()
     trained = getattr(model, "crowdsi_trained", None)
@@ -91,13 +98,30 @@ def run_crowdsi(
 
     model.eval()
     with torch.no_grad():
-        final_output = model(
+        zero_shot_output = model(
             data,
-            mechanism_latent=selected_posterior.mean,
+            mechanism_latent=evidence.base_posterior.mean,
             sample_mechanism=False,
         )
-    adapted_posterior = torch.softmax(final_output["hat_task_option"], dim=-1)
-    base_posterior = torch.softmax(final_output["hat_task_option_base"], dim=-1)
+        selected_output = (
+            zero_shot_output
+            if not use_adaptation
+            else model(
+                data,
+                mechanism_latent=selected_posterior.mean,
+                sample_mechanism=False,
+            )
+        )
+
+    crowdfm_posterior = torch.softmax(
+        zero_shot_output["hat_task_option_base"], dim=-1
+    )
+    zero_shot_posterior = torch.softmax(
+        zero_shot_output["hat_task_option"], dim=-1
+    )
+    selected_task_posterior = torch.softmax(
+        selected_output["hat_task_option"], dim=-1
+    )
     result: dict[str, Any] = {
         "config": asdict(cfg),
         "seed": seed,
@@ -106,10 +130,12 @@ def run_crowdsi(
         "e_value_threshold": evidence.threshold,
         "adaptation_supported": evidence.adapt,
         "used_adaptation": use_adaptation,
-        "task_posterior": adapted_posterior,
-        "base_task_posterior": base_posterior,
-        "task_prediction": adapted_posterior.argmax(dim=-1),
-        "base_task_prediction": base_posterior.argmax(dim=-1),
+        "task_posterior": selected_task_posterior,
+        "zero_shot_task_posterior": zero_shot_posterior,
+        "crowdfm_task_posterior": crowdfm_posterior,
+        "task_prediction": selected_task_posterior.argmax(dim=-1),
+        "zero_shot_task_prediction": zero_shot_posterior.argmax(dim=-1),
+        "crowdfm_task_prediction": crowdfm_posterior.argmax(dim=-1),
         "mechanism_mean_base": evidence.base_posterior.mean,
         "mechanism_log_variance_base": evidence.base_posterior.log_variance,
         "mechanism_mean_selected": selected_posterior.mean,
@@ -118,14 +144,20 @@ def run_crowdsi(
     }
     task_y = getattr(data, "task_y", None)
     if isinstance(task_y, torch.Tensor):
-        task_y = task_y.to(adapted_posterior.device, dtype=torch.long)
+        task_y = task_y.to(selected_task_posterior.device, dtype=torch.long)
         valid = task_y >= 0
         if torch.any(valid):
             result["accuracy"] = float(
                 (result["task_prediction"][valid] == task_y[valid]).float().mean().item()
             )
-            result["base_accuracy"] = float(
-                (result["base_task_prediction"][valid] == task_y[valid])
+            result["zero_shot_accuracy"] = float(
+                (result["zero_shot_task_prediction"][valid] == task_y[valid])
+                .float()
+                .mean()
+                .item()
+            )
+            result["crowdfm_accuracy"] = float(
+                (result["crowdfm_task_prediction"][valid] == task_y[valid])
                 .float()
                 .mean()
                 .item()
