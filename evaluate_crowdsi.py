@@ -44,13 +44,25 @@ def main() -> None:
             "used_adaptation": result["used_adaptation"],
         }
         if "accuracy" in result:
-            record["accuracy"] = result["accuracy"]
-            record["base_accuracy"] = result["base_accuracy"]
-            record["accuracy_delta"] = result["accuracy"] - result["base_accuracy"]
+            record.update(
+                {
+                    "adapted_accuracy": result["accuracy"],
+                    "zero_shot_accuracy": result["zero_shot_accuracy"],
+                    "crowdfm_accuracy": result["crowdfm_accuracy"],
+                    "adaptation_delta": (
+                        result["accuracy"] - result["zero_shot_accuracy"]
+                    ),
+                    "crowdsi_zero_shot_delta": (
+                        result["zero_shot_accuracy"] - result["crowdfm_accuracy"]
+                    ),
+                }
+            )
         results[name] = record
         accuracy_text = (
-            f", acc={record['accuracy']:.4f}, base={record['base_accuracy']:.4f}"
-            if "accuracy" in record
+            f", adapted={record['adapted_accuracy']:.4f}, "
+            f"zero={record['zero_shot_accuracy']:.4f}, "
+            f"crowdfm={record['crowdfm_accuracy']:.4f}"
+            if "adapted_accuracy" in record
             else ""
         )
         print(
