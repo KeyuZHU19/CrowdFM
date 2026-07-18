@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import random
 
-import numpy as np
 import torch
 from torch.utils.data import IterableDataset
 
@@ -34,6 +33,9 @@ class CrowdSISimulator:
         self.num_answer_each_task_range = tuple(
             kwargs.get("num_answer_each_task_range", (3, 10))
         )
+        self.min_answers_per_task = int(kwargs.get("min_answers_per_task", 3))
+        if self.min_answers_per_task < 1:
+            raise ValueError("min_answers_per_task must be positive")
         self.mechanism_families = list(
             kwargs.get(
                 "mechanism_families",
@@ -92,18 +94,22 @@ class CrowdSISimulator:
         )
         data.task_y = torch.randint(0, data.num_option, (data.num_task,))
 
-        target_density = min(0.95, max(2.0 / data.num_worker, target_answers / data.num_worker))
+        target_density = min(
+            0.95,
+            max(self.min_answers_per_task / data.num_worker, target_answers / data.num_worker),
+        )
         base_logit = math.log(target_density / (1.0 - target_density))
         ability_z = self._standardize(data.worker_ability)[:, None]
         difficulty_z = self._standardize(data.task_difficulty)[None, :]
         assignment_logits = base_logit + assignment_strength * (ability_z - difficulty_z)
         assignment_probability = torch.sigmoid(assignment_logits)
         assignment_mask = torch.rand_like(assignment_probability) < assignment_probability
+        minimum_answers = min(self.min_answers_per_task, data.num_worker)
         for task in range(data.num_task):
-            if int(assignment_mask[:, task].sum().item()) < 2:
+            if int(assignment_mask[:, task].sum().item()) < minimum_answers:
                 top = torch.topk(
                     assignment_probability[:, task],
-                    k=min(2, data.num_worker),
+                    k=minimum_answers,
                 ).indices
                 assignment_mask[top, task] = True
         data.assignment_probability = assignment_probability
