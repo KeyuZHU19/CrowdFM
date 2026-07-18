@@ -157,7 +157,11 @@ def crowdsi_training_loss(
         num_negative,
         seed=seed + 1,
     )
-    positive_loss_sum = F.softplus(-positive_assignment_logits).sum()
+    total_positive = int(data.triple.shape[1])
+    positive_sampling_weight = total_positive / max(1, positive_assignment_logits.numel())
+    positive_loss_sum = (
+        positive_sampling_weight * F.softplus(-positive_assignment_logits).sum()
+    )
     if negative_workers.numel() > 0:
         negative_logits = _assignment_logits_from_output(
             model,
@@ -165,11 +169,13 @@ def crowdsi_training_loss(
             negative_workers,
             negative_tasks,
         )
-        sampling_weight = total_negative / negative_logits.numel()
-        negative_loss_sum = sampling_weight * F.softplus(negative_logits).sum()
+        negative_sampling_weight = total_negative / negative_logits.numel()
+        negative_loss_sum = (
+            negative_sampling_weight * F.softplus(negative_logits).sum()
+        )
     else:
         negative_loss_sum = positive_loss_sum.new_zeros(())
-    assignment_denominator = max(1, audit_indices.numel() + total_negative)
+    assignment_denominator = max(1, total_positive + total_negative)
     assignment_loss = (positive_loss_sum + negative_loss_sum) / assignment_denominator
 
     second_split = make_annotation_audit_split(
