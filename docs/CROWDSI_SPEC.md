@@ -54,14 +54,17 @@ The final response axis is normalized with `softmax` inside the likelihood.
 
 ## 2. Dataset-level mechanism encoder
 
-`GaussianMechanismEncoder` uses four permutation-invariant summaries:
+`GaussianMechanismEncoder` uses five permutation-invariant summaries:
 
 1. mean worker embedding;
 2. mean task embedding;
 3. mean option embedding;
-4. mean encoded observed-edge embedding.
+4. mean encoded observed-edge embedding;
+5. normalized worker/task degree statistics: mean, standard deviation, minimum, and maximum for each side of the bipartite graph.
 
-It returns a diagonal Gaussian. Edge order must not affect the posterior. Worker/task identity permutations remain equivariant through the CrowdFM backbone and invariant after pooling.
+The degree summary is explicit because normalized attention can otherwise erase assignment density. It lets the mechanism posterior observe sparse-selection structure even when the label values are unchanged.
+
+The encoder returns a diagonal Gaussian. Edge order must not affect the posterior. Worker/task identity permutations remain equivariant through the CrowdFM backbone and invariant after pooling.
 
 ## 3. Compositional mechanism basis
 
