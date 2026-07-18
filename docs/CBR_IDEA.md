@@ -1,41 +1,35 @@
-# Certified-by-Residual for Crowd Aggregation
+# Residual-Audited Crowd Foundation Models
 
-## Problem
+## Research question
 
-A foundation aggregator can transfer across annotation matrices, but its confidence is only meaningful when the deployment noise process is compatible with the synthetic prior used during pretraining. CbR adds an instance-level posterior-predictive audit that asks whether the model can reproduce the worker-pair disagreement structure observed on held-out labels.
+Given a crowd foundation model pretrained on synthetic annotation worlds and a new deployment annotation graph without gold labels, can cross-fitted held-out annotations determine whether the model's conditional response distribution remains compatible with the deployment process, and can rejection-based defer improve selective aggregation?
 
-## Core idea
+## Current idea
 
-For each audit item `k`, CrowdFM receives only a context subset of its labels and produces an item posterior `q_k(c)`. Annotator confusion matrices `P_i(a | c)` are estimated from separate nuisance items. For two held-out workers `i,j`, the fitted model predicts
-
-```math
-\widetilde p_{ijk}
-= 1 - \sum_c q_k(c)\sum_a P_i(a\mid c)P_j(a\mid c).
-```
-
-The observed disagreement is `D_ijk = 1[A_ik != A_jk]`. CbR aggregates signed standardized differences into a worker-pair matrix
+The official CrowdFM backbone predicts task truth but does not predict how a specific worker will label a specific task.  The revised method therefore adds a masked-annotation response head
 
 ```math
-R_{ij}=
-\frac{\sum_k m_{ijk}(D_{ijk}-\widetilde p_{ijk})}
-{\sqrt{\sum_k m_{ijk}\widetilde p_{ijk}(1-\widetilde p_{ijk})+\lambda}}.
+r_{ik}(a)=Pr_\theta(A_{ik}=a\mid G_C,i,k),
 ```
 
-The audit statistic is the two-sided operator norm
+trained by hiding annotation edges and predicting their labels from the remaining context graph.
 
-```math
-T=\lVert R\rVert_{op}
-=\max(|\lambda_{max}(R)|,|\lambda_{min}(R)|).
-```
+At deployment, audit labels are never exposed to the model.  Their categorical residuals provide:
 
-A fixed-nuisance conditional Monte Carlo test preserves the deployment annotation mask, samples latent truths from `q_k`, samples held-out labels from the fitted confusion matrices, and computes an exact finite-bootstrap p-value under the fitted predictive null.
+1. a marginal log-score calibration statistic;
+2. a signed worker-pair residual covariance matrix whose two-sided operator norm detects coherent dependence or shared bias.
+
+Conditional Monte Carlo samples audit responses directly from the fixed rows `r_ik`.  Separate marginal and dependence p-values are combined by Bonferroni.  Rejection triggers defer.
+
+## What changed
+
+The previous implementation estimated full worker confusion matrices from deployment labels and combined them with CrowdFM task posteriors.  That estimator was an external heuristic rather than an output of the frozen CrowdFM model.  Multiclass null rejection remained strongly inflated even after refit bootstrap, posterior-predictive sampling, hierarchical shrinkage, and higher-support diagnostics.
+
+The full history is recorded in `CALIBRATION_RESULTS.md`.  The formal revised method is in `IDEA.md`.
 
 ## Interpretation
 
-- A large statistic is evidence that the fitted independent confusion model cannot explain the held-out disagreement structure.
-- A small statistic is not a proof that the aggregate label is correct.
-- Detectability is limited to alternatives that change the observable held-out disagreement law. Observationally equivalent coordinated behavior cannot be detected without extra information.
-
-## Positioning
-
-CbR is not a claim that a learned monotone link inherits every DGN theorem. Uniform symmetric noise is instead treated as a special case: its confusion matrices recover the standard DGN pairwise-disagreement identity. The primary contribution is a cross-fitted, item-conditioned, spectrally summarized posterior-predictive audit for an amortized crowd aggregator, followed by selective defer or routing.
+- Rejection means that the learned held-out response law cannot reproduce the checked deployment annotations at the selected level.
+- Non-rejection means compatibility with the checked predictive law, not proof that task labels are correct.
+- The response head must be trained; an official CrowdFM checkpoint alone is insufficient.
+- Observationally equivalent failure processes remain undetectable without gold labels or additional information.
