@@ -1,212 +1,231 @@
-# Experiment Plan: Residual-Audited Crowd Foundation Models
+# Experiment Plan: CrowdSI-FM
 
-This is the live plan for the revised masked-annotation predictive audit.  The confusion-based experiments are historical diagnostics and must not be continued as the primary method.
+The primary claim is no longer that a fixed response model can audit itself. CrowdSI-FM must show that a pretrained crowd foundation model can identify and safely adapt to a new dataset-level crowd mechanism without deployment gold labels.
 
 ## Paper claims
 
 | ID | Claim | Required evidence |
 |---|---|---|
-| C1 | A crowd foundation model can learn a transferable conditional distribution for held-out worker responses. | Masked-annotation NLL, Brier score, and calibration on unseen worlds and real matrices. |
-| C2 | Conditional Monte Carlo controls false rejection when the learned response law is calibrated. | Nominal-vs-empirical rejection curves and p-value histograms. |
-| C3 | Marginal and spectral residuals detect complementary deployment shifts. | Power curves by shift family and severity; component ablations. |
-| C4 | Cross-fitting is necessary and worker residual structure localizes coherent failures. | Leakage ablation and coalition-localization AUC. |
-| C5 | Audit-based defer improves selective aggregation rather than merely detecting synthetic OOD labels. | Risk--coverage, AURC, accepted-set accuracy, and oracle-router gap. |
+| C1 | A separately exchangeable foundation architecture can infer a transferable dataset-level crowd mechanism. | Mechanism-family/parameter recovery, view consistency, posterior contraction, and held-out-world likelihood. |
+| C2 | Compositional mechanism primitives generalize to unseen combinations better than a fixed CrowdFM or categorical family classifier. | Train-family/composition holdouts and interpolation/extrapolation results. |
+| C3 | Test-time latent adaptation improves aggregation under mechanism shift without updating network weights. | Base vs always-adapt vs oracle-latent vs CrowdSI adaptation accuracy and response likelihood. |
+| C4 | Task-disjoint e-value gating controls false adaptation under the fixed plug-in null. | False-adaptation curves at multiple alpha values, e-value calibration, and exact-null simulations. |
+| C5 | Evidence gating preserves in-prior performance while recovering OOD performance. | Accuracy-gain/false-adaptation tradeoffs, real benchmark results, and adaptation-data scaling. |
+| C6 | Modeling assignment and response generation jointly matters when observation is non-random. | Assignment-bias holdouts and ablations without the mask head. |
 
-## Phase 0 — Implementation and local validation
+## Phase 0 — Local implementation validation
 
-- [x] Add `PredictiveCFM` with a K-invariant masked-annotation response head.
-- [x] Add leakage-free context/audit edge splitting.
-- [x] Add marginal categorical log-score residual.
-- [x] Add signed worker-pair residual covariance and two-sided operator norm.
-- [x] Add exact conditional Monte Carlo component tests and Bonferroni joint p-value.
-- [x] Add masked-response plus task-truth training objective.
-- [x] Add training and evaluation entrypoints.
-- [x] Preserve the old confusion implementation as a reproducible negative control.
-- [ ] Pull the branch and run the complete unit-test suite.
-- [ ] Run a one-batch training smoke test and verify that response-head gradients and checkpoint markers are correct.
-- [ ] Add checkpoint-resume support to `train_predictive.py` if long runs require it.
+Completed in code:
 
-Commands:
+- [x] `CrowdSIFM` with Gaussian mechanism posterior;
+- [x] compositional mechanism basis;
+- [x] mechanism-conditioned task, emission, and assignment heads;
+- [x] shared-truth task-joint response likelihood;
+- [x] task-disjoint cross-fitting;
+- [x] latent-only variational adaptation;
+- [x] cross-fitted e-value gate;
+- [x] mechanism-diverse simulator;
+- [x] training/evaluation entrypoints and tests.
+
+Still required locally:
 
 ```bash
 git pull --ff-only origin agent/cbr-audit-core
 pytest -q
-python train_predictive.py config=config/predictive_train.yaml epochs=2 batch_size=2 output_dir=log/predictive_smoke
+python train_crowdsi.py \
+  config=config/crowdsi_train.yaml \
+  epochs=2 \
+  gradient_accumulation_steps=1 \
+  output_dir=log/crowdsi_smoke
 ```
 
-## Phase 1 — Response model validation
+The complete suite is expected to contain the previous 21 tests plus 7 CrowdSI tests. Do not claim `28 passed` until it is executed locally.
 
-The audit is meaningful only if `r_ik` is a useful held-out response predictor.  Before any OOD experiment, compare:
+## Phase 1 — Mechanism-model validation
 
-1. option-frequency baseline;
-2. worker empirical-frequency baseline;
-3. Dawid--Skene posterior predictive;
-4. 3PL/GLAD-style low-dimensional predictor;
-5. frozen CrowdFM backbone plus trained response head;
-6. jointly fine-tuned PredictiveCFM.
+Train on the full synthetic family vocabulary first, before mechanism holdouts.
 
 Metrics:
 
-- annotation NLL;
-- Brier score;
-- top-label accuracy;
-- expected calibration error;
-- reliability diagrams stratified by `K`, worker support, and task degree;
-- worker cold-start and low-support performance.
+- task-truth accuracy;
+- masked response joint NLL per task;
+- annotation Brier score;
+- assignment AUROC/AUPRC;
+- Gaussian posterior KL and entropy;
+- primitive utilization and collapse diagnostics;
+- mechanism-view symmetric KL;
+- simulator mechanism-family linear-probe accuracy;
+- continuous mechanism-parameter R2 from frozen mechanism latents.
 
-Training regimes:
+Baselines:
 
-- synthetic-only masked-response training;
-- synthetic task-truth plus masked-response multi-task training;
-- synthetic pretraining plus self-supervised real-matrix response training;
-- frozen backbone versus joint fine-tuning.
+1. original CrowdFM;
+2. PredictiveCFM without a global mechanism latent;
+3. CrowdSI with a single deterministic mechanism token;
+4. CrowdSI Gaussian latent without compositional primitives;
+5. CrowdSI without assignment modeling;
+6. full CrowdSI-FM.
 
-Decision rule: do not interpret audit p-values until the response predictor outperforms unconditional and worker-frequency baselines and has acceptable in-prior calibration.
+Decision rule: do not run adaptation claims until the full model matches or exceeds CrowdFM truth accuracy in-prior and predicts held-out response/assignment data better than fixed-mechanism baselines.
 
-## Phase 2 — Null calibration
+## Phase 2 — Exact-null e-value validation
 
-Use unseen worlds sampled from the same declared pretraining distribution.  Evaluate at `alpha in {0.01, 0.05, 0.10}` over strata of:
+Generate data directly from a frozen trained CrowdSI model at the plug-in mechanism mean. This isolates the mathematical gate from simulator misspecification.
 
-- `M in {20, 50, 100}`;
-- `N in {200, 500, 1000}`;
-- `K in {2, 5, 10, 20}`;
-- labels per task;
-- class imbalance;
-- worker support and task difficulty.
+For `alpha in {0.01,0.05,0.10}` report:
+
+- empirical `Pr(E >= 1/alpha)`;
+- confidence intervals over at least 1000 worlds;
+- distributions of `log E_A->B`, `log E_B->A`, and combined `log E`;
+- sensitivity to fold balance and predictive Monte Carlo sample count;
+- leakage control using edge rather than task splitting.
+
+The primary theorem applies to this fixed plug-in null. Simulator in-prior experiments are a model-calibration question, not an exact test of the theorem.
+
+## Phase 3 — Held-out mechanism families
+
+Train without one entire family, then test it:
+
+- class-conditioned bias;
+- coalition/shared response shocks;
+- non-random assignment;
+- strong task-difficulty shift;
+- temporal worker drift;
+- adversarial target-class behavior.
+
+Compare:
+
+- CrowdFM zero-shot;
+- PredictiveCFM fixed mechanism;
+- CrowdSI no adaptation;
+- CrowdSI always adapt;
+- CrowdSI e-value gated;
+- per-dataset Dawid--Skene/GLAD/MACE;
+- DGN and DGN-Adapt;
+- oracle simulator mechanism and oracle gate.
 
 Report:
 
-- marginal rejection;
-- dependence rejection;
-- Bonferroni joint rejection;
-- p-value histograms;
-- calibration error and confidence intervals.
+- truth accuracy before/after adaptation;
+- response joint NLL;
+- e-value detection power;
+- false-adaptation rate;
+- posterior distance to simulator mechanism target;
+- adaptation gain versus number of held-out tasks.
 
-Use `B=199` for development and `B=999` for final figures.  A badly calibrated learned response law is a model failure; Monte Carlo is not expected to repair it.
+## Phase 4 — Compositional generalization
 
-Required controls:
+This is the most important novelty experiment. Train on primitive mechanisms individually but hold out their combinations.
 
-- oracle response probabilities from the generator;
-- learned response probabilities;
-- labels exposed to the model as a deliberate leakage control;
-- shuffled query-worker identities;
-- untrained response head, which must fail or be refused by the pipeline.
+Examples:
 
-## Phase 3 — Structured deployment shift
+- class bias + assignment bias;
+- coalition + difficulty shift;
+- class bias + coalition;
+- all three combined.
 
-Hold out entire mechanisms, not merely parameter values, from response-head training:
+Compare the compositional basis against:
 
-1. class-conditioned error directions;
-2. stronger task-difficulty dependence;
-3. worker--worker coalition dependence;
-4. temporal worker drift;
-5. non-random worker assignment;
-6. Sybil workers and targeted label attacks;
-7. class or option semantics absent from training.
+- one categorical mechanism embedding;
+- an unconstrained global MLP token;
+- a mixture-of-experts router with discrete top-1 selection;
+- no mechanism latent.
 
-For each family, run severity, density, worker-support, and coalition-size sweeps.  Report:
+Measure:
 
-- AUROC/AUPRC;
-- power at `alpha=0.05`;
-- marginal versus dependence component power;
-- leading-eigenvector worker localization;
-- annotation-prediction degradation;
-- aggregation-accuracy degradation.
+- aggregation accuracy;
+- response likelihood;
+- primitive weights versus known composition coefficients;
+- interpolation to unseen severity mixtures;
+- extrapolation beyond training severity ranges.
 
-Include an observationally equivalent alternative as a negative control.  The paper must state that such a process is information-theoretically invisible to the checked response law.
+A main-conference claim requires improvement on held-out combinations, not merely recovery of training family IDs.
 
-## Phase 4 — Real-mask semi-synthetic evaluation
+## Phase 5 — Non-ignorable assignment
 
-Preserve real worker--task masks and inject controlled responses.  Candidate datasets include LabelMe, RTE, Trec, Dog, Bird, and ZC_all after verifying exact directory names.
+Use worlds where assignment depends on worker ability, task difficulty, worker group, or target class. Preserve the same response mechanism while varying only assignment.
 
-This phase separates shift detection from unrealistic dense synthetic overlap.  Evaluate every method under the same mask and known injected mechanism.
+Ablations:
 
-- [ ] Implement mask extraction.
-- [ ] Implement response sampling from in-prior and held-out mechanisms.
-- [ ] Run at least six masks, four mechanisms, and multiple severities.
-- [ ] Report power and worker localization with mask-specific confidence intervals.
+- ignore `O_ik`;
+- treat missingness as random;
+- assignment head trained but not conditioned on mechanism;
+- full mechanism-conditioned assignment head.
 
-## Phase 5 — Real benchmarks
+Metrics:
 
-Train the response head without using deployment gold task labels.  On real datasets report:
+- assignment likelihood/AUROC;
+- task accuracy under assignment shift;
+- mechanism posterior error;
+- adaptation gain;
+- e-value response when only the assignment process changes.
 
-- CrowdFM aggregation accuracy where gold truth is available for evaluation only;
-- masked-annotation NLL/Brier;
-- marginal, dependence, and joint p-values;
-- rejection stability across cross-fit seeds;
-- runtime and bootstrap cost;
-- qualitative residual-eigenvector case studies.
+The current e-value implementation uses annotation responses only. A second assignment e-value should be added after the response-only core is validated.
 
-Do not label a real matrix “OOD” solely because it is rejected.  The statistically correct interpretation is incompatibility with the learned response law.
+## Phase 6 — Real-mask semi-synthetic evaluation
 
-## Phase 6 — Selective aggregation
+Take worker--task masks from real datasets and generate labels from known mechanisms. This separates unrealistic synthetic density from mechanism inference.
 
-Compare the audit gate against:
+Required masks include at least six datasets spanning sparse/dense and binary/multiclass regimes. For each mask, evaluate in-prior, held-out-family, and held-out-composition worlds.
 
-- CrowdFM entropy and margin;
-- split-view or worker-subsampling instability;
-- latent embedding OOD scores;
-- response NLL without the dependence statistic;
-- dependence statistic without marginal calibration;
-- majority-vote and classical-model diagnostics.
+## Phase 7 — Real benchmarks
 
-Fallbacks must be pre-specified and evaluated rather than called safe by assumption.  Report:
+Use all available CrowdFM datasets. Adaptation receives no task truths. Gold labels are used only for retrospective evaluation.
 
-- coverage;
-- accepted-set risk/accuracy;
-- AURC;
-- accuracy at fixed coverage;
-- fallback penalty on false rejections;
-- gain on detected failure families;
-- oracle-router gap.
+Report:
+
+- original CrowdFM accuracy;
+- CrowdSI zero-shot accuracy;
+- always-adapt accuracy;
+- evidence-gated accuracy;
+- per-dataset e-value and adaptation decision;
+- masked response NLL;
+- assignment prediction quality where the full matrix dimensions are known;
+- runtime and adaptation steps.
+
+Interpretation must remain conservative: high e-value means an alternative mechanism posterior predicts task-disjoint held-out annotations substantially better than the plug-in base law. It does not identify the unique real mechanism.
+
+## Phase 8 — Theory experiments
+
+Empirically test the theorem-facing quantities:
+
+1. false adaptation under the exact plug-in null;
+2. linear growth of `log E` with held-out task count under a fixed KL-separated alternative;
+3. posterior contraction with deployment task count;
+4. effect of generalized-Bayes temperature under misspecification;
+5. primitive identifiability up to permutation and redundant bases.
 
 ## Required ablations
 
-- no cross-fitting;
-- response head trained with and without task-truth loss;
-- frozen versus fine-tuned backbone;
-- binary disagreement residual versus full categorical residual;
-- marginal-only, dependence-only, and joint test;
-- Frobenius norm, maximum entry, and one-sided eigenvalue instead of the two-sided operator norm;
-- worker-context support threshold;
-- audit/context fraction;
-- Monte Carlo count `B in {99,199,499,999}`.
+- no mechanism latent;
+- deterministic vs Gaussian mechanism;
+- categorical family embedding vs compositional basis;
+- no mechanism consistency;
+- no assignment head;
+- edge-disjoint vs task-disjoint folds;
+- point alternative vs posterior mixture alternative;
+- always adapt vs e-value gate;
+- backbone frozen vs joint pretraining;
+- latent dimension and primitive count;
+- adaptation KL weight, temperature, and task count.
 
 ## Reproducibility
 
-Training seeds: `42, 43, 44`.
+Training seeds: `42,43,44`.
 
-Evaluation/cross-fit seeds: `42, 43, 44, 45, 46`.
+Evaluation/fold seeds: `42,43,44,45,46`.
 
-Every output must record:
+Every result must record:
 
-- Git commit;
-- full model/training/audit configuration;
-- checkpoint path;
-- dataset/world seed;
-- split seed;
-- runtime;
-- response metrics;
-- component and joint p-values.
+- Git commit and checkpoint;
+- simulator family and continuous parameters;
+- full configuration;
+- base/adapt fold assignments;
+- base and adapted mechanism posterior;
+- directional and combined e-values;
+- aggregation and predictive metrics;
+- runtime and memory.
 
-## Historical execution log
+## Historical negative result
 
-### Official CrowdFM baseline
-
-- Evaluated all 16 available dataset directories.
-- Mean task accuracy: `0.8229134873`.
-- Mean reported per-dataset runtime: `0.0849569976` seconds.
-
-### Confusion-based smoke audit
-
-- Rejected 14/16 real datasets at `alpha=0.05`.
-- This was not evidence that 14 datasets were truly OOD; it showed that the manufactured stationary confusion null was too restrictive or poorly estimated.
-
-### Confusion calibration decomposition
-
-- Oracle response law produced approximately nominal rejection.
-- Estimated response law produced `70--74%` rejection in the first full sweep.
-- Hierarchical shrinkage reduced but did not solve inflation: estimated-confusion rejection remained `28.75%` with CrowdFM `q` and `51.25%` with oracle `q` aggregated over 80 worlds.
-- Support sweeps reduced disagreement MAE but did not establish a clean audit because nuisance estimation and audit power grew together.
-
-These results motivate the current direct masked-annotation response model.  See `CALIBRATION_RESULTS.md` for details.
+The confusion-estimator CbR experiments remain useful motivation: a deployment-fitted full confusion bridge was badly anti-conservative in sparse multiclass settings. PredictiveCFM corrected the missing generative output but remained a fixed-mechanism audit. CrowdSI-FM is the current primary direction because it changes aggregation through explicit deployment system identification rather than only detecting mismatch.
