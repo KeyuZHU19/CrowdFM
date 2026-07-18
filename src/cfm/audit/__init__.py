@@ -1,5 +1,27 @@
-"""Certified-by-Residual auditing utilities for CrowdFM."""
+"""Deployment-time auditing utilities for CrowdFM.
 
+The primary API is the masked-annotation predictive audit exported below.  The
+older confusion-matrix CbR implementation remains available for reproducing the
+negative calibration study, but it is no longer the recommended method.
+"""
+
+from .predictive import (
+    PredictiveResidualResult,
+    build_predictive_residual,
+    marginal_log_score_statistic,
+    normalize_annotation_probabilities,
+    spectral_statistic as predictive_spectral_statistic,
+    standardized_categorical_residuals,
+)
+from .predictive_bootstrap import (
+    PredictiveMonteCarloResult,
+    conditional_predictive_test,
+)
+from .predictive_pipeline import PredictiveAuditConfig, run_predictive_audit
+from .predictive_split import AnnotationAuditSplit, make_annotation_audit_split
+from .predictive_training import PredictiveTrainingConfig, predictive_training_loss
+
+# Legacy confusion-based CbR exports retained for result reproduction.
 from .bootstrap import MonteCarloResult, conditional_monte_carlo_test
 from .calibration import (
     CALIBRATION_VARIANTS,
@@ -23,6 +45,22 @@ from .synthetic import (
 )
 
 __all__ = [
+    # Primary predictive-audit API.
+    "AnnotationAuditSplit",
+    "PredictiveAuditConfig",
+    "PredictiveMonteCarloResult",
+    "PredictiveResidualResult",
+    "PredictiveTrainingConfig",
+    "build_predictive_residual",
+    "conditional_predictive_test",
+    "make_annotation_audit_split",
+    "marginal_log_score_statistic",
+    "normalize_annotation_probabilities",
+    "predictive_spectral_statistic",
+    "predictive_training_loss",
+    "run_predictive_audit",
+    "standardized_categorical_residuals",
+    # Legacy confusion-based API.
     "CALIBRATION_VARIANTS",
     "CBRConfig",
     "CalibrationWorldResult",
