@@ -1,6 +1,5 @@
 import torch
 
-from cfm.audit.pipeline import masked_data
 from cfm.audit.predictive import build_predictive_residual
 from cfm.audit.predictive_bootstrap import conditional_predictive_test
 from cfm.audit.predictive_pipeline import PredictiveAuditConfig, run_predictive_audit
@@ -105,6 +104,21 @@ def test_predictive_residual_is_finite_and_two_sided():
     assert torch.isfinite(result.residual_matrix).all()
     assert torch.allclose(result.residual_matrix, result.residual_matrix.T)
     assert int(result.pair_counts[0, 1].item()) == 2
+
+
+def test_marginal_statistic_detects_direction_under_uniform_predictions():
+    probabilities = torch.full((8, 2), 0.5)
+    answers = torch.zeros(8, dtype=torch.long)
+    workers = torch.tensor([0, 1] * 4)
+    tasks = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3])
+    result = build_predictive_residual(
+        probabilities,
+        answers,
+        workers,
+        tasks,
+        num_worker=2,
+    )
+    assert result.marginal_statistic > 3.0
 
 
 def test_conditional_predictive_test_is_reproducible():
