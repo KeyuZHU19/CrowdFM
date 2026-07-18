@@ -50,7 +50,7 @@ def run_predictive_audit(
         )
         output["hat_annotation_option"]  # [num_audit_edges, num_options]
 
-    The response logits must be trained by masked-annotation prediction.  The
+    The response logits must be trained by masked-annotation prediction. The
     audit never estimates a post-hoc worker confusion matrix and never exposes
     held-out answers to the model.
     """
@@ -58,6 +58,15 @@ def run_predictive_audit(
     cfg = config or PredictiveAuditConfig()
     if not 0.0 < cfg.alpha < 1.0:
         raise ValueError("alpha must lie strictly between zero and one")
+    if cfg.num_bootstrap < 1:
+        raise ValueError("num_bootstrap must be positive")
+    minimum_joint_p_value = 2.0 / (cfg.num_bootstrap + 1.0)
+    if minimum_joint_p_value > cfg.alpha:
+        raise ValueError(
+            "num_bootstrap is too small for the Bonferroni joint test at the "
+            f"requested alpha: minimum attainable p-value is "
+            f"{minimum_joint_p_value:.6f}"
+        )
     if cfg.require_trained_response_head and _response_head_is_untrained(model):
         raise RuntimeError(
             "the masked-annotation response head is marked untrained; train it "
@@ -122,6 +131,7 @@ def run_predictive_audit(
         "config": asdict(cfg),
         "seed": seed,
         "p_value": calibration.p_value,
+        "minimum_joint_p_value": minimum_joint_p_value,
         "marginal_p_value": calibration.marginal_p_value,
         "dependence_p_value": calibration.dependence_p_value,
         "reject": calibration.p_value <= cfg.alpha,
