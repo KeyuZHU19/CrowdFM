@@ -8,7 +8,7 @@ negative calibration study, but it is no longer the recommended method.
 from .predictive import (
     PredictiveResidualResult,
     build_predictive_residual,
-    marginal_log_score_statistic,
+    marginal_categorical_statistic,
     normalize_annotation_probabilities,
     spectral_statistic as predictive_spectral_statistic,
     standardized_categorical_residuals,
@@ -54,7 +54,7 @@ __all__ = [
     "build_predictive_residual",
     "conditional_predictive_test",
     "make_annotation_audit_split",
-    "marginal_log_score_statistic",
+    "marginal_categorical_statistic",
     "normalize_annotation_probabilities",
     "predictive_spectral_statistic",
     "predictive_training_loss",
