@@ -1,86 +1,134 @@
-# CbR Implementation Specification
+# Predictive Audit Implementation Specification
 
-## Data split
+## 1. Model contract
 
-For each seed:
+The primary audit no longer estimates a deployment confusion matrix.  A compatible model must accept
 
-1. Split eligible items into nuisance and audit items.
-2. Use all labels on nuisance items to estimate annotator confusion matrices.
-3. Split labels on every audit item into context and held-out audit workers.
-4. CrowdFM receives nuisance plus context edges only.
-5. Residual construction uses held-out audit edges only.
-
-This separation is mandatory. It prevents the model from adapting its item posterior to the same labels used to judge its predictive fit.
-
-## Nuisance estimates
-
-Let `q_k(c)` be CrowdFM's softmax posterior over classes. Estimate confusion matrices by posterior expected counts with symmetric Dirichlet smoothing:
-
-```math
-\widehat P_i(a\mid c)
-= \frac{\eta/K + \sum_{(i,k)\in\mathcal E_N}
-q_k(c)\mathbf 1[A_{ik}=a]}
-{\eta + \sum_{(i,k)\in\mathcal E_N}q_k(c)}.
+```python
+output = model(
+    context_data,
+    query_workers=query_workers,
+    query_tasks=query_tasks,
+)
 ```
 
-The current implementation uses a fixed-nuisance estimator. A learned confusion head can be added later, but must preserve the same cross-fit boundary.
+and return
 
-## Item-conditioned prediction
-
-For held-out annotations by workers `i,j` on item `k`:
-
-```math
-\widetilde p_{ijk}
-=1-\sum_c q_k(c)\sum_a
-\widehat P_i(a\mid c)\widehat P_j(a\mid c).
+```python
+output["hat_annotation_option"]  # [num_query_edges, num_options]
 ```
 
-Do not replace `q_k` with a dataset-level class prior. Worker assignment and item composition can be non-random.
+These logits represent the conditional response distribution for each held-out `(worker, task)` edge.  `PredictiveCFM` implements this interface with a scorer shared across candidate options.
 
-## Residual matrix
+The response head must be trained by masked-annotation prediction.  `run_predictive_audit` refuses checkpoints whose `PredictiveCFM.response_head_trained` marker is false.
 
-For support indicator `m_ijk`, define
+## 2. Context/audit split
 
-```math
-R_{ij}=
-\frac{\sum_k m_{ijk}(D_{ijk}-\widetilde p_{ijk})}
-{\sqrt{\sum_k m_{ijk}\widetilde p_{ijk}(1-\widetilde p_{ijk})+\lambda}}.
-```
+`make_annotation_audit_split` partitions every edge into exactly one of:
 
-Unsupported worker pairs and the diagonal are zero. Use
+- context: visible to the model;
+- audit: hidden from the model and used only after response probabilities are fixed.
 
-```math
-T(R)=\lVert R\rVert_{op}
-```
+Each audited task retains at least:
 
-rather than `lambda_max(R)` because structured excess agreement can appear as a large negative eigenvalue.
+- `min_context_workers` visible labels;
+- `min_audit_workers >= 2` hidden labels.
 
-## Conditional Monte Carlo calibration
+Each worker remaining in the audit set has at least `min_worker_context_edges` visible annotations elsewhere in the context graph.  If support repair leaves a task with fewer than two audit labels, that task is returned entirely to context.
 
-Condition on:
+## 3. Training objective
 
-- the observed worker-item mask;
-- context labels and the resulting `q_k`;
-- fitted confusion matrices;
-- all split masks.
-
-For each replicate, sample one latent truth per item from `q_k`, then sample each held-out audit label independently from its worker confusion row. Recompute `R` and `T`, and use
+For audit query edge `e=(i,k)` with observed label `A_e`, train
 
 ```math
-\widehat p=(1+\sum_b\mathbf 1[T_b\ge T_{obs}])/(B+1).
+\mathcal L_{resp}
+=-\sum_e\log r_e(A_e).
 ```
 
-The initial implementation is fixed-nuisance. Full refitting bootstrap is an optional robustness experiment, not the default.
+When synthetic truth is present, add the original task classification loss:
 
-## Output semantics
+```math
+\mathcal L
+=\lambda_a\mathcal L_{resp}+\lambda_y\mathcal L_{truth}.
+```
 
-- `reject=True`: the held-out disagreement pattern is incompatible with the fitted predictive null at level `alpha`.
-- `reject=False`: insufficient evidence against the fitted predictive null.
-- Neither outcome directly certifies ground-truth accuracy.
+The helper `predictive_training_loss` constructs a fresh masked split and returns both losses.  Frozen-backbone head training is the initial baseline; joint fine-tuning is an ablation, not an assumption of the audit.
 
-## Planned extensions
+## 4. Categorical residual
 
-1. Repeated cross-fitting and p-value aggregation.
-2. Learned K-invariant confusion head from worker embeddings.
-3. OOD generators for coalition dependence, temporal drift, item-dependent skill, and class-conditioned shift.
-4. Selective routing and risk-coverage evaluation.
+For predicted row `r_e` and observed answer `A_e`, define
+
+```math
+u_{e,a}
+=
+\frac{1[A_e=a]-r_e(a)}
+{\sqrt{r_e(a)(1-r_e(a))+\epsilon}}.
+```
+
+Probabilities are clipped and renormalized using `probability_clip` before residual construction and Monte Carlo sampling.
+
+## 5. Marginal statistic
+
+For each edge, let `L_e=-log r_e(A_e)`.  Its exact conditional mean and variance under `A_e~Categorical(r_e)` are used to construct
+
+```math
+T_{marg}
+=
+\frac{|\sum_e(L_e-E L_e)|}
+{\sqrt{\sum_e Var(L_e)+\epsilon}}.
+```
+
+This detects direction-specific marginal response error and does not reduce labels to a binary disagreement indicator.
+
+## 6. Dependence statistic
+
+For worker pair `(i,j)` sharing `n_ij` audit tasks,
+
+```math
+R_{ij}
+=
+\frac{1}{\sqrt{n_{ij}}}
+\sum_k \frac{u_{ik}^T u_{jk}}{K},
+\qquad R_{ii}=0.
+```
+
+Pairs with fewer than `min_pair_count` shared audit tasks are masked.  The statistic is
+
+```math
+T_{dep}=\lVert R\rVert_{op}
+=\max(|\lambda_{max}(R)|,|\lambda_{min}(R)|).
+```
+
+The two-sided norm is required because both excess disagreement and excess agreement can indicate misspecification.
+
+## 7. Conditional Monte Carlo test
+
+Condition on the context graph, query identities, exact audit mask, and fixed response rows.  For every replicate sample each audit label independently from its row and recompute both statistics.
+
+For `s in {marg, dep}`:
+
+```math
+p_s
+=
+\frac{1+\sum_b1[T_s^{(b)}\ge T_s^{obs}]}{B+1}.
+```
+
+The reported joint value is
+
+```math
+p_{joint}=\min(1,2\min(p_{marg},p_{dep})).
+```
+
+Under the fixed predictive null, plus-one Monte Carlo exchangeability makes each component p-value conditionally valid.  Bonferroni controls the joint false-rejection probability without assuming independence between statistics.
+
+## 8. Output semantics
+
+- `reject=True`: the checked held-out response law is rejected at `alpha`;
+- `reject=False`: the audit lacks evidence against that law;
+- neither result directly proves or disproves task-truth correctness.
+
+The result returns separate p-values and statistics, response probabilities, support counts, split masks, and bootstrap samples.
+
+## 9. Legacy implementation
+
+`pipeline.py`, `disagreement.py`, `bootstrap.py`, and `calibration.py` implement the retired post-hoc confusion audit.  They remain importable only to reproduce the negative calibration study.  New experiments must use the `predictive_*` modules.
