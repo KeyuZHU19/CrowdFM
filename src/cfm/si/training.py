@@ -38,18 +38,16 @@ def _sample_negative_pairs(
     num_negative: int,
     *,
     seed: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    if num_negative < 1:
-        empty = torch.empty(0, dtype=torch.long, device=data.triple.device)
-        return empty, empty
+) -> tuple[torch.Tensor, torch.Tensor, int]:
     workers = data.triple[0].detach().cpu().long()
     tasks = data.triple[2].detach().cpu().long()
     observed = torch.zeros(data.num_worker * data.num_task, dtype=torch.bool)
     observed[workers * data.num_task + tasks] = True
     candidates = torch.nonzero(~observed, as_tuple=False).flatten()
-    if candidates.numel() == 0:
+    total_negative = int(candidates.numel())
+    if num_negative < 1 or total_negative == 0:
         empty = torch.empty(0, dtype=torch.long, device=data.triple.device)
-        return empty, empty
+        return empty, empty, total_negative
     generator = torch.Generator(device="cpu")
     generator.manual_seed(seed)
     selected = candidates[
@@ -60,6 +58,7 @@ def _sample_negative_pairs(
     return (
         negative_workers.to(data.triple.device),
         negative_tasks.to(data.triple.device),
+        total_negative,
     )
 
 
@@ -153,13 +152,12 @@ def crowdsi_training_loss(
 
     positive_assignment_logits = output["hat_assignment_logit"]
     num_negative = int(round(cfg.assignment_negative_ratio * audit_indices.numel()))
-    negative_workers, negative_tasks = _sample_negative_pairs(
+    negative_workers, negative_tasks, total_negative = _sample_negative_pairs(
         data,
         num_negative,
         seed=seed + 1,
     )
-    assignment_logits = positive_assignment_logits
-    assignment_targets = torch.ones_like(positive_assignment_logits)
+    positive_loss_sum = F.softplus(-positive_assignment_logits).sum()
     if negative_workers.numel() > 0:
         negative_logits = _assignment_logits_from_output(
             model,
@@ -167,17 +165,12 @@ def crowdsi_training_loss(
             negative_workers,
             negative_tasks,
         )
-        assignment_logits = torch.cat([positive_assignment_logits, negative_logits])
-        assignment_targets = torch.cat(
-            [
-                torch.ones_like(positive_assignment_logits),
-                torch.zeros_like(negative_logits),
-            ]
-        )
-    assignment_loss = F.binary_cross_entropy_with_logits(
-        assignment_logits,
-        assignment_targets,
-    )
+        sampling_weight = total_negative / negative_logits.numel()
+        negative_loss_sum = sampling_weight * F.softplus(negative_logits).sum()
+    else:
+        negative_loss_sum = positive_loss_sum.new_zeros(())
+    assignment_denominator = max(1, audit_indices.numel() + total_negative)
+    assignment_loss = (positive_loss_sum + negative_loss_sum) / assignment_denominator
 
     second_split = make_annotation_audit_split(
         data.triple,
@@ -220,4 +213,5 @@ def crowdsi_training_loss(
         "output": output,
         "split": split,
         "num_audit_edges": int(audit_indices.numel()),
+        "num_assignment_negatives": total_negative,
     }
