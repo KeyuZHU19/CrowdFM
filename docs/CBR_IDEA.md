@@ -1,10 +1,12 @@
-# Residual-Audited Crowd Foundation Models
+# PredictiveCFM Baseline: Fixed-Mechanism Residual Audit
+
+> **Status:** this document describes the intermediate fixed-mechanism baseline. The primary method is now CrowdSI-FM in `IDEA.md` and `CROWDSI_SPEC.md`.
 
 ## Research question
 
 Given a crowd foundation model pretrained on synthetic annotation worlds and a new deployment annotation graph without gold labels, can cross-fitted held-out annotations determine whether the model's conditional annotator-emission law remains compatible with the deployment process, and can rejection-based defer improve selective aggregation?
 
-## Current idea
+## Baseline idea
 
 The official CrowdFM backbone predicts the task posterior
 
@@ -12,7 +14,7 @@ The official CrowdFM backbone predicts the task posterior
 q_k(c)=\Pr(Y_k=c\mid G_C),
 ```
 
-but does not expose a predictive law for held-out worker responses. The revised model adds an edge-conditioned emission head
+but does not expose a predictive law for held-out worker responses. PredictiveCFM adds an edge-conditioned emission head
 
 ```math
 P_{ik}(a\mid c,G_C)
@@ -28,17 +30,25 @@ The two checks are:
 
 Separate p-values are combined by Bonferroni. Rejection triggers defer.
 
-## What changed
+## Why it is no longer the main method
 
-The previous implementation estimated full worker confusion matrices from sparse deployment labels and combined them with frozen CrowdFM task posteriors. That estimator was an external heuristic rather than an output of CrowdFM. Multiclass null rejection remained strongly inflated after refit bootstrap, posterior-predictive sampling, hierarchical shrinkage, and support diagnostics.
+PredictiveCFM corrected the invalid post-hoc confusion bridge, but it still exposes one fixed mechanism learned at pretraining. When deployment differs, it can reject or defer but cannot identify a replacement mechanism and improve aggregation constructively.
 
-The revised method learns the response law amortized during pretraining, estimates no full confusion matrix at deployment, and preserves the dependence among workers induced by shared task truth.
+CrowdSI-FM retains the conditional emission model but adds:
 
-The full failure history is in `CALIBRATION_RESULTS.md`; the formal definition is in `IDEA.md`; implementation details are in `CBR_SPEC.md`.
+- an explicit dataset-level mechanism posterior;
+- compositional mechanism primitives;
+- assignment-process modeling;
+- latent-only test-time Bayesian adaptation;
+- task-disjoint e-value gating;
+- adapted final truth aggregation.
+
+## Historical predecessor
+
+The still earlier implementation estimated full worker confusion matrices from sparse deployment labels and combined them with frozen CrowdFM task posteriors. Multiclass null rejection remained strongly inflated after refit bootstrap, posterior-predictive sampling, hierarchical shrinkage, and support diagnostics. The full progression is recorded in `CALIBRATION_RESULTS.md`.
 
 ## Interpretation
 
-- Rejection means the learned held-out annotation law cannot reproduce the checked deployment responses at the selected level.
-- Non-rejection means compatibility with the checked law, not proof that task labels are correct.
-- The conditional emission head must be trained; the original CrowdFM checkpoint alone is insufficient.
-- Observationally equivalent failure processes remain undetectable without gold labels or additional anchors.
+- PredictiveFM rejection means the fixed learned annotation law cannot reproduce the checked deployment responses.
+- Non-rejection means compatibility with that fixed law, not proof that task labels are correct.
+- It remains a useful ablation for determining whether explicit mechanism inference and adaptation add value beyond a learned response decoder.
