@@ -76,13 +76,19 @@ def standardized_categorical_residuals(
     return residuals, probabilities
 
 
-def marginal_log_score_statistic(
+def marginal_categorical_statistic(
     probabilities: torch.Tensor,
     observed_answers: torch.Tensor,
     *,
     variance_ridge: float = 1e-8,
 ) -> torch.Tensor:
-    """Standardized deviation of held-out log score from its predictive mean."""
+    """Direction-sensitive standardized mean categorical residual.
+
+    Log-score aggregation can be blind to class-direction shifts when every
+    predicted row is uniform.  This statistic instead retains the full option
+    direction.  Monte Carlo calibration handles the negative covariance among
+    categorical coordinates, so only coordinate-wise variance scaling is used.
+    """
 
     if variance_ridge <= 0:
         raise ValueError("variance_ridge must be positive")
@@ -90,21 +96,16 @@ def marginal_log_score_statistic(
         device=probabilities.device,
         dtype=torch.long,
     )
-    negative_log_probability = -torch.log(
-        probabilities.clamp_min(torch.finfo(probabilities.dtype).tiny)
-    )
-    observed = negative_log_probability.gather(
-        1,
-        observed_answers.unsqueeze(1),
-    ).squeeze(1)
-    expected = (probabilities * negative_log_probability).sum(dim=-1)
-    variance = (
-        probabilities
-        * (negative_log_probability - expected.unsqueeze(1)).square()
-    ).sum(dim=-1)
-    return torch.abs((observed - expected).sum()) / torch.sqrt(
-        variance.sum() + variance_ridge
-    )
+    one_hot = F.one_hot(
+        observed_answers,
+        num_classes=probabilities.shape[1],
+    ).to(probabilities.dtype)
+    centered = one_hot - probabilities
+    coordinate_variance = (
+        probabilities * (1.0 - probabilities)
+    ).sum(dim=0) + variance_ridge
+    standardized_mean = centered.sum(dim=0) / torch.sqrt(coordinate_variance)
+    return torch.linalg.vector_norm(standardized_mean, ord=2)
 
 
 def spectral_statistic(residual_matrix: torch.Tensor) -> float:
@@ -133,10 +134,11 @@ def build_predictive_residual(
 
         u_e = diag(r_e * (1-r_e) + ridge)^(-1/2) (onehot(A_e)-r_e).
 
-    The marginal statistic checks the aggregate held-out log score.  For each
-    worker pair, the dependence residual averages u_ik^T u_jk over shared audit
-    tasks and divides by sqrt(pair count).  Under a correct conditionally
-    independent response law, every off-diagonal entry has conditional mean zero.
+    The marginal statistic checks the direction-sensitive aggregate categorical
+    residual.  For each worker pair, the dependence residual averages u_ik^T
+    u_jk over shared audit tasks and divides by sqrt(pair count).  Under a correct
+    conditionally independent response law, every off-diagonal entry has
+    conditional mean zero.
     """
 
     if num_worker < 1:
@@ -165,7 +167,7 @@ def build_predictive_residual(
         device=probabilities.device,
         dtype=torch.long,
     )
-    marginal = marginal_log_score_statistic(
+    marginal = marginal_categorical_statistic(
         probabilities,
         observed_answers,
         variance_ridge=variance_ridge,
