@@ -2,73 +2,67 @@
 
 ## One-sentence definition
 
-We extend a crowd foundation model with masked-annotation prediction and use cross-fitted held-out annotations to test whether its deployment-time response distribution is compatible with the observed crowd, deferring aggregation when that predictive law is rejected.
+We extend a crowd foundation model with masked-annotation prediction and use cross-fitted held-out annotations to test whether its deployment-time worker-response distribution is compatible with the observed crowd, deferring aggregation when that predictive law is rejected.
 
 ## 1. Research problem
 
-Let a deployment dataset contain workers `i in [M]`, tasks `k in [N]`, options `a in [K]`, an observation mask `O`, and observed annotations `A_ik` wherever `O_ik = 1`.  The task truth `Y_k` is unavailable at deployment.
+A deployment dataset contains workers `i in [M]`, tasks `k in [N]`, options `a in [K]`, an observation mask `O`, and annotations `A_ik` wherever `O_ik=1`. The task truth `Y_k` is unavailable at deployment.
 
-A conventional CrowdFM backbone learns the discriminative aggregation map
+The original CrowdFM learns the discriminative aggregation map
 
 ```text
 annotation graph G -> q_theta(Y_k | G).
 ```
 
-A high-confidence `q_theta` does not reveal whether the deployment annotation process resembles the synthetic worlds used in pretraining.  Without gold labels, correctness itself is not identifiable: two latent worlds can induce the same observed graph while assigning different truths.  The defensible label-free question is therefore not
+A confident task posterior does not reveal whether the deployment annotation process resembles the synthetic worlds used in pretraining. Without gold labels, task-truth correctness is not identifiable in general: the same observed graph may arise from latent worlds with different truths.
 
-```text
-Is the predicted truth certainly correct?
-```
+The defensible label-free question is therefore:
 
-but
+> Can the model predict annotations that were not shown to it?
 
-```text
-Can the model predict annotations that were not shown to it?
-```
-
-Formally, given a context graph `G_C` and held-out edge set `H`, the model must expose
+Given a context graph `G_C` and held-out edge set `H`, the revised model exposes
 
 ```math
 r_{ik}(a)
 =
-Pr_theta(A_{ik}=a | G_C, i, k),
-qquad (i,k) in H.
+\Pr_\theta(A_{ik}=a\mid G_C,i,k),
+\qquad (i,k)\in H.
 ```
 
-The deployment audit tests
+The deployment audit checks the factorized conditional predictive null
 
 ```math
 H_0:
-\mathcal L(A_H | G_C,H)
+\mathcal L(A_H\mid G_C,H)
 =
-\prod_{(i,k)\in H}\operatorname{Categorical}(r_{ik})
+\prod_{(i,k)\in H}\operatorname{Categorical}(r_{ik}).
 ```
 
-against detectable departures in either marginal response prediction or cross-worker dependence.  Non-rejection means compatibility with this checked predictive law, not proof that the aggregated labels are correct.
+The alternative consists of detectable departures in marginal response probabilities or cross-worker dependence. Non-rejection means compatibility with this checked predictive law, not proof that the aggregated task labels are correct.
 
-## 2. Why the previous implementation was not the intended method
+## 2. Why the previous implementation was abandoned
 
-The first code path used the frozen CrowdFM task posterior `q_k` and fitted a full worker-specific confusion matrix
+The first implementation used the frozen CrowdFM task posterior `q_k` and estimated a full worker-specific confusion matrix
 
 ```math
-\widehat P_i(a|c)
+\widehat P_i(a\mid c)
 ```
 
-from deployment annotations.  It then manufactured response predictions through
+from deployment annotations. It then manufactured response probabilities through
 
 ```math
 \widehat r_{ik}(a)
 =
-\sum_c q_k(c)\widehat P_i(a|c).
+\sum_c q_k(c)\widehat P_i(a\mid c).
 ```
 
-This bridge was not produced or trained by the official CrowdFM checkpoint.  In sparse multiclass data, each worker/class row had only a few effective observations but `K-1` free parameters.  Hierarchical shrinkage reduced entrywise error but did not calibrate the audit: estimated-confusion null rejection remained 20--75% across the main settings, while oracle-confusion variants stayed close to the nominal level.  Increasing total task count also increased audit power, so small remaining nuisance bias continued to be detected.
+This response law was neither produced nor trained by the official CrowdFM checkpoint. In sparse multiclass settings, each worker/class row had only a few effective observations but `K-1` free parameters. Refit bootstrap, posterior-predictive sampling, prior-strength sweeps, and hierarchical shrinkage did not restore null calibration. Oracle-confusion variants stayed near nominal, while estimated-confusion rejection remained as high as 65--75% in the ten-class setting.
 
 The conclusion is structural:
 
 > A post-hoc full confusion estimator cannot be treated as the predictive law of a discriminative crowd foundation model.
 
-The old implementation remains in the repository only to reproduce this negative result.  It is not the primary method.
+The old implementation remains only as a reproducible negative result.
 
 ## 3. Predictive CrowdFM
 
@@ -77,34 +71,31 @@ The old implementation remains in the repository only to reproduce this negative
 The original backbone maps the visible annotation graph to worker, task, and option embeddings
 
 ```math
-z_i^w,\quad z_k^t,\quad z_a^o,
+z_i^w,\qquad z_k^t,\qquad z_a^o,
 ```
 
-and task-truth logits.
+and to task-truth logits.
 
 ### 3.2 Masked-annotation response head
 
-For every held-out query edge `(i,k)`, a shared option scorer predicts
+For every held-out query edge `(i,k)`, a scorer shared across candidate options predicts
 
 ```math
-\ell_{ika}
-=
-h_\phi(z_i^w,z_k^t,z_a^o),
+\ell_{ika}=h_\phi(z_i^w,z_k^t,z_a^o),
 \qquad
 r_{ik}(a)=\operatorname{softmax}_a(\ell_{ika}).
 ```
 
-The scorer is shared over options and therefore supports variable `K`.  Unlike a stationary confusion matrix, `r_ik` may depend on worker history, task context, item difficulty encoded by the graph, and the current option embeddings.
+Sharing the scorer over options permits variable `K`. Unlike a stationary confusion matrix, `r_ik` may depend on worker history, task context, task difficulty encoded by the graph, and option representations.
 
 ### 3.3 Training objective
 
-During pretraining, randomly hide annotation edges before the forward pass.  The hidden responses supervise
+Randomly hide annotation edges before the forward pass. Their labels supervise
 
 ```math
 \mathcal L_{resp}
 =
--\sum_{(i,k)\in H}
-\log r_{ik}(A_{ik}).
+-\sum_{(i,k)\in H}\log r_{ik}(A_{ik}).
 ```
 
 When synthetic task truth is available, retain the original aggregation objective
@@ -115,27 +106,27 @@ When synthetic task truth is available, retain the original aggregation objectiv
 -\sum_k\log q_k(Y_k),
 ```
 
-and train
+and optimize
 
 ```math
 \mathcal L
 =
-\lambda_y\mathcal L_{truth}
+\lambda_a\mathcal L_{resp}
 +
-\lambda_a\mathcal L_{resp}.
+\lambda_y\mathcal L_{truth}.
 ```
 
-Real crowd matrices without gold truth can still contribute to `L_resp` as self-supervised data.  An official CrowdFM checkpoint may initialize the backbone, but the new response head must be trained before any audit claim is made.
+Real annotation matrices without gold task truth can still contribute to `L_resp` as self-supervised training data. An official CrowdFM checkpoint may initialize the backbone, but the new response head must be trained before its probabilities are audited.
 
 ## 4. Leakage-free deployment split
 
-For each auditable task, split its observed workers into a visible context set and a held-out audit set.  Every remaining audit worker must have a minimum amount of visible history elsewhere in the context graph.  The model receives only context edges.  Audit labels are used only after all response probabilities have been fixed.
+For each auditable task, split observed workers into a visible context set and a held-out audit set. Every remaining audit worker must have a minimum amount of visible history elsewhere in the context graph. The model receives only context edges; audit labels are used only after all response probabilities have been fixed.
 
-This cross-fitting condition is load-bearing: using an audited annotation to construct its own prediction would make residuals artificially small.
+Cross-fitting is load-bearing. If an audited annotation participates in constructing its own probability row, a flexible model can shrink its residual artificially.
 
 ## 5. Predictive residuals
 
-For audit edge `e=(i,k)`, define the standardized categorical residual vector
+For audit edge `(i,k)`, define the standardized categorical residual vector
 
 ```math
 u_{ik,a}
@@ -144,21 +135,27 @@ u_{ik,a}
 {\sqrt{r_{ik}(a)(1-r_{ik}(a))+\epsilon}}.
 ```
 
-The audit uses two complementary checks.
+The audit uses two complementary statistics.
 
-### 5.1 Marginal response calibration
+### 5.1 Marginal categorical calibration
 
-Let `L_ik=-log r_ik(A_ik)`.  Under the fixed predictive row `r_ik`, its conditional mean and variance are available exactly.  The standardized aggregate log-score deviation is
+A scalar aggregate log score can be blind to directional shift when predicted rows are uniform. The implementation therefore retains the full option direction:
 
 ```math
-T_{marg}
+z_a
 =
-\frac{\left|\sum_{(i,k)\in H}
-[L_{ik}-\mathbb E_{r_{ik}}L_{ik}]\right|}
-{\sqrt{\sum_{(i,k)\in H}\operatorname{Var}_{r_{ik}}(L_{ik})+\epsilon}}.
+\frac{\sum_{(i,k)\in H}
+[\mathbf 1\{A_{ik}=a\}-r_{ik}(a)]}
+{\sqrt{\sum_{(i,k)\in H}r_{ik}(a)(1-r_{ik}(a))+\epsilon}},
 ```
 
-This detects direction-specific response misprediction that binary disagreement would discard.
+and defines
+
+```math
+T_{marg}=\lVert z\rVert_2.
+```
+
+The categorical coordinates are negatively correlated, but the method does not use a Gaussian approximation to calibrate this statistic. Its exact finite-instance null distribution is simulated from the fixed categorical rows.
 
 ### 5.2 Structured worker dependence
 
@@ -173,72 +170,81 @@ R_{ij}
 \qquad R_{ii}=0.
 ```
 
-Under the conditionally independent predictive null, `E[R_ij | G_C]=0`.  A coalition, shared bias, temporal shock, or unmodelled worker dependence can create a coherent signed block.  The dependence statistic is the two-sided operator norm
+Under the conditionally independent predictive null,
 
 ```math
-T_{dep}=\lVert R\rVert_{op}.
+\mathbb E[R_{ij}\mid G_C]=0.
 ```
 
-The leading absolute-eigenvalue eigenvector can localize workers driving rejection.
+A coalition, shared bias, temporal shock, or unmodelled dependence can create a coherent signed block. The dependence statistic is
+
+```math
+T_{dep}=\lVert R\rVert_{op}
+=
+\max\{|\lambda_{max}(R)|,|\lambda_{min}(R)|\}.
+```
+
+The leading absolute-eigenvalue eigenvector can localize the workers driving rejection.
 
 ## 6. Conditional Monte Carlo audit
 
-Condition on the context graph, exact audit mask, query workers/tasks, and fixed response rows `r_ik`.  For replicate `b`, independently sample
+Condition on the context graph, exact audit mask, query worker/task identities, and fixed response rows `r_ik`. For replicate `b`, independently sample
 
 ```math
 A_{ik}^{(b)}\sim\operatorname{Categorical}(r_{ik})
 ```
 
-and recompute both statistics.  Plus-one Monte Carlo p-values are
+and recompute both statistics. For `s in {marg,dep}` use the plus-one p-value
 
 ```math
 p_s
 =
 \frac{1+\sum_{b=1}^{B}\mathbf 1\{T_s^{(b)}\ge T_s^{obs}\}}
-{B+1},
-\qquad s\in\{marg,dep\}.
+{B+1}.
 ```
 
-The joint test uses the Bonferroni value
+Combine the two valid component tests by
 
 ```math
 p_{joint}=\min\{1,2\min(p_{marg},p_{dep})\}.
 ```
 
-Under `H_0`, each component p-value is finite-sample conditionally valid by exchangeability, and Bonferroni controls the joint false-rejection probability without assuming independence between the two statistics.
+Under `H_0`, the observed audit labels and Monte Carlo replicates are exchangeable conditional on the fixed response rows. Each component p-value is therefore finite-sample conditionally valid, and Bonferroni controls the joint false-rejection probability without requiring independence between statistics.
 
-The system emits the base aggregation only when `p_joint > alpha`; otherwise it defers.
+The system emits the base aggregation only when `p_joint>alpha`; otherwise it defers.
 
-## 7. Claims and non-claims
+## 7. What the paper can claim
 
 ### Valid claims
 
-1. Conditional finite-sample type-I control when the fixed held-out response law is correct.
-2. A direct label-free test of deployment response prediction rather than a heuristic confidence score.
-3. Sensitivity to both marginal annotation shift and structured cross-worker dependence.
-4. A selective aggregation mechanism whose utility can be measured through risk--coverage.
+1. A direct label-free test of held-out response prediction rather than a heuristic confidence score.
+2. Conditional finite-sample type-I control when the fixed response law is correct.
+3. Complementary sensitivity to marginal annotation shift and structured cross-worker dependence.
+4. Worker localization through the signed spectral residual.
+5. A selective aggregation mechanism whose utility is evaluated through risk--coverage.
 
-### Invalid claims
+### Claims to avoid
 
 1. Non-rejection does not certify task-truth correctness.
-2. The audit cannot detect a process that induces the same conditional held-out response law.
-3. Random response-head weights or an untrained official CrowdFM checkpoint do not define a valid audit.
-4. A rejected model does not imply that any particular fallback is automatically correct.
+2. A process inducing the same conditional held-out response law is not detectable by this audit.
+3. An untrained response head or the original CrowdFM checkpoint alone does not define a valid audit.
+4. Rejection does not make any particular fallback automatically correct.
+5. Exact Monte Carlo calibration cannot repair a systematically misspecified learned response predictor.
 
-## 8. Required experimental program
+## 8. Experimental program
 
-### Phase A: predictive model quality
+### A. Response-model quality
 
-- masked-annotation NLL, Brier score, and calibration;
-- comparison with worker-frequency, Dawid--Skene, 3PL/GLAD, and unconditional baselines;
+- masked-annotation NLL, Brier score, accuracy, and calibration;
+- worker-frequency, Dawid--Skene, 3PL/GLAD, and unconditional baselines;
 - frozen-backbone head training versus joint fine-tuning;
-- synthetic-only versus synthetic plus real self-supervised pretraining.
+- synthetic-only versus synthetic plus real self-supervised training.
 
-### Phase B: null calibration
+### B. In-prior null calibration
 
-Generate unseen in-prior worlds and report rejection at `alpha in {0.01,0.05,0.1}` across `M,N,K`, density, imbalance, and worker heterogeneity.  The primary requirement is that the learned response law itself is calibrated; an exact Monte Carlo test cannot repair a misspecified predictor.
+Evaluate empirical rejection at multiple nominal levels over unseen worlds stratified by `M,N,K`, sparsity, imbalance, worker support, and task difficulty. Include oracle response rows to isolate the statistical test from response-model error.
 
-### Phase C: structured shift power
+### C. Structured shift power
 
 Hold out complete mechanisms from pretraining:
 
@@ -247,26 +253,28 @@ Hold out complete mechanisms from pretraining:
 - worker coalitions and dependence;
 - non-random assignment;
 - temporal drift;
-- Sybil or adversarial workers.
+- Sybil and targeted adversarial workers.
 
-Report marginal/dependence detection separately, joint power, worker localization, and severity curves.
+Report marginal and dependence power separately, joint power, localization, and severity curves.
 
-### Phase D: selective aggregation
+### D. Selective aggregation
 
-Measure clean accuracy, accepted-set accuracy, coverage, risk--coverage AUC, and the gain or loss produced by each defer route.  Compare against CrowdFM entropy/margin, ensemble or split-view instability, latent OOD scores, and classical aggregation diagnostics.
+Measure coverage, accepted-set risk, AURC, accuracy at fixed coverage, fallback gain/penalty, and oracle-router gap. Compare against CrowdFM entropy/margin, worker-subsampling instability, latent OOD scores, and classical diagnostics.
 
-## 9. Current implementation map
+## 9. Implementation map
 
 Primary implementation:
 
-- `src/cfm/model/PredictiveCFM.py`: response head and CrowdFM wrapper;
-- `src/cfm/audit/predictive_split.py`: leakage-free annotation split;
-- `src/cfm/audit/predictive.py`: categorical and spectral residuals;
-- `src/cfm/audit/predictive_bootstrap.py`: conditional Monte Carlo test;
-- `src/cfm/audit/predictive_pipeline.py`: deployment audit;
-- `src/cfm/audit/predictive_training.py`: joint masked-response/truth objective;
-- `tests/test_predictive_audit.py`: unit tests for the new path.
+- `src/cfm/model/PredictiveCFM.py`;
+- `src/cfm/audit/predictive_split.py`;
+- `src/cfm/audit/predictive.py`;
+- `src/cfm/audit/predictive_bootstrap.py`;
+- `src/cfm/audit/predictive_pipeline.py`;
+- `src/cfm/audit/predictive_training.py`;
+- `train_predictive.py`;
+- `evaluate_predictive_audit.py`;
+- `tests/test_predictive_audit.py`.
 
 Historical implementation:
 
-- `disagreement.py`, `bootstrap.py`, `pipeline.py`, and `calibration.py` reproduce the confusion-estimation study and are retained as a documented negative control.
+- `disagreement.py`, `bootstrap.py`, `pipeline.py`, `calibration.py`, and `run_cbr_calibration.py` reproduce the confusion-estimation study and are retained as documented negative controls.
