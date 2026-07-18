@@ -1,6 +1,6 @@
 """Deployment-time auditing utilities for CrowdFM.
 
-The primary API is the masked-annotation predictive audit exported below.  The
+The primary API is the masked-annotation predictive audit exported below. The
 older confusion-matrix CbR implementation remains available for reproducing the
 negative calibration study, but it is no longer the recommended method.
 """
@@ -9,6 +9,7 @@ from .predictive import (
     PredictiveResidualResult,
     build_predictive_residual,
     marginal_categorical_statistic,
+    marginal_response_probabilities,
     normalize_annotation_probabilities,
     spectral_statistic as predictive_spectral_statistic,
     standardized_categorical_residuals,
@@ -55,6 +56,7 @@ __all__ = [
     "conditional_predictive_test",
     "make_annotation_audit_split",
     "marginal_categorical_statistic",
+    "marginal_response_probabilities",
     "normalize_annotation_probabilities",
     "predictive_spectral_statistic",
     "predictive_training_loss",
