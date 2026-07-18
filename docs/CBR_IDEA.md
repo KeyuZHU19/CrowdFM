@@ -2,34 +2,43 @@
 
 ## Research question
 
-Given a crowd foundation model pretrained on synthetic annotation worlds and a new deployment annotation graph without gold labels, can cross-fitted held-out annotations determine whether the model's conditional response distribution remains compatible with the deployment process, and can rejection-based defer improve selective aggregation?
+Given a crowd foundation model pretrained on synthetic annotation worlds and a new deployment annotation graph without gold labels, can cross-fitted held-out annotations determine whether the model's conditional annotator-emission law remains compatible with the deployment process, and can rejection-based defer improve selective aggregation?
 
 ## Current idea
 
-The official CrowdFM backbone predicts task truth but does not predict how a specific worker will label a specific task.  The revised method therefore adds a masked-annotation response head
+The official CrowdFM backbone predicts the task posterior
 
 ```math
-r_{ik}(a)=Pr_\theta(A_{ik}=a\mid G_C,i,k),
+q_k(c)=\Pr(Y_k=c\mid G_C),
 ```
 
-trained by hiding annotation edges and predicting their labels from the remaining context graph.
+but does not expose a predictive law for held-out worker responses. The revised model adds an edge-conditioned emission head
 
-At deployment, audit labels are never exposed to the model.  Their categorical residuals provide:
+```math
+P_{ik}(a\mid c,G_C)
+=\Pr(A_{ik}=a\mid Y_k=c,G_C,i,k).
+```
 
-1. a marginal log-score calibration statistic;
-2. a signed worker-pair residual covariance matrix whose two-sided operator norm detects coherent dependence or shared bias.
+At deployment, the audit hides labels from the model. For each audit task it treats all held-out workers as sharing the same unknown truth `Y_k`, computes item-conditioned marginal and pairwise-disagreement residuals, and calibrates them by Monte Carlo simulation that first samples one truth per task and then samples worker responses conditional on that truth.
 
-Conditional Monte Carlo samples audit responses directly from the fixed rows `r_ik`.  Separate marginal and dependence p-values are combined by Bonferroni.  Rejection triggers defer.
+The two checks are:
+
+1. a direction-sensitive marginal categorical residual;
+2. a signed worker-pair disagreement matrix summarized by its two-sided operator norm.
+
+Separate p-values are combined by Bonferroni. Rejection triggers defer.
 
 ## What changed
 
-The previous implementation estimated full worker confusion matrices from deployment labels and combined them with CrowdFM task posteriors.  That estimator was an external heuristic rather than an output of the frozen CrowdFM model.  Multiclass null rejection remained strongly inflated even after refit bootstrap, posterior-predictive sampling, hierarchical shrinkage, and higher-support diagnostics.
+The previous implementation estimated full worker confusion matrices from sparse deployment labels and combined them with frozen CrowdFM task posteriors. That estimator was an external heuristic rather than an output of CrowdFM. Multiclass null rejection remained strongly inflated after refit bootstrap, posterior-predictive sampling, hierarchical shrinkage, and support diagnostics.
 
-The full history is recorded in `CALIBRATION_RESULTS.md`.  The formal revised method is in `IDEA.md`.
+The revised method learns the response law amortized during pretraining, estimates no full confusion matrix at deployment, and preserves the dependence among workers induced by shared task truth.
+
+The full failure history is in `CALIBRATION_RESULTS.md`; the formal definition is in `IDEA.md`; implementation details are in `CBR_SPEC.md`.
 
 ## Interpretation
 
-- Rejection means that the learned held-out response law cannot reproduce the checked deployment annotations at the selected level.
-- Non-rejection means compatibility with the checked predictive law, not proof that task labels are correct.
-- The response head must be trained; an official CrowdFM checkpoint alone is insufficient.
-- Observationally equivalent failure processes remain undetectable without gold labels or additional information.
+- Rejection means the learned held-out annotation law cannot reproduce the checked deployment responses at the selected level.
+- Non-rejection means compatibility with the checked law, not proof that task labels are correct.
+- The conditional emission head must be trained; the original CrowdFM checkpoint alone is insufficient.
+- Observationally equivalent failure processes remain undetectable without gold labels or additional anchors.
