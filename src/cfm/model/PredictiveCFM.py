@@ -9,20 +9,21 @@ import torch.nn.functional as F
 from .CFM import CFM
 
 
-class MaskedAnnotationHead(torch.nn.Module):
-    """Predict a held-out worker response from CrowdFM node embeddings.
+class ConditionalAnnotationHead(torch.nn.Module):
+    """Predict a held-out response conditional on each candidate task truth.
 
-    The scorer is shared across candidate options, so the same parameters support
-    any number of classes K.  For each query edge (worker i, task k), the head
-    scores every option a from the concatenated worker, task, and option
-    embeddings and returns logits with shape [num_queries, num_options].
+    For every query edge (worker i, task k), the shared scorer evaluates every
+    candidate truth c and reported option a.  The output has shape
+    [num_queries, num_options, num_options] and is normalized over the final
+    reported-option axis.  Sharing the scorer across option embeddings preserves
+    the variable-K interface of CrowdFM.
     """
 
     def __init__(self, dim: int, dropout: float = 0.0):
         super().__init__()
         self.dim = int(dim)
         self.scorer = torch.nn.Sequential(
-            torch.nn.Linear(3 * self.dim, 2 * self.dim),
+            torch.nn.Linear(4 * self.dim, 2 * self.dim),
             torch.nn.LeakyReLU(),
             torch.nn.Dropout(float(dropout)),
             torch.nn.Linear(2 * self.dim, 1),
@@ -50,31 +51,42 @@ class MaskedAnnotationHead(torch.nn.Module):
         num_query = query_workers.numel()
         num_option = z_option.shape[0]
 
-        worker = z_worker[query_workers].unsqueeze(1).expand(-1, num_option, -1)
-        task = z_task[query_tasks].unsqueeze(1).expand(-1, num_option, -1)
-        option = z_option.unsqueeze(0).expand(num_query, -1, -1)
-        features = torch.cat([worker, task, option], dim=-1)
+        worker = z_worker[query_workers, None, None, :].expand(
+            -1, num_option, num_option, -1
+        )
+        task = z_task[query_tasks, None, None, :].expand(
+            -1, num_option, num_option, -1
+        )
+        truth_option = z_option[None, :, None, :].expand(
+            num_query, -1, num_option, -1
+        )
+        reported_option = z_option[None, None, :, :].expand(
+            num_query, num_option, -1, -1
+        )
+        features = torch.cat(
+            [worker, task, truth_option, reported_option],
+            dim=-1,
+        )
         return self.scorer(features).squeeze(-1)
 
 
 class PredictiveCFM(torch.nn.Module):
-    """CrowdFM with an explicit masked-annotation predictive distribution.
+    """CrowdFM with a learned annotation-emission distribution.
 
-    The original CrowdFM backbone predicts item truth.  This wrapper adds the
-    missing deployment-audit object
+    The original backbone predicts q_theta(Y_k | context graph).  The added head
+    predicts
 
-        r_theta(A_ik = a | context graph, worker i, task k).
+        P_phi(A_ik = a | Y_k = c, context graph, worker i, task k).
 
-    The response head must be trained with held-out annotation prediction before
-    its probabilities are used by the audit.  An official CrowdFM checkpoint can
-    initialize ``backbone``; the new response head is then trained separately or
-    jointly with the backbone.
+    Marginal response probabilities and within-task worker dependence are then
+    induced by the shared task posterior.  The head must be trained with masked
+    annotations before its probabilities are used by the deployment audit.
     """
 
     def __init__(self, **kwargs: Any):
         super().__init__()
         self.backbone = CFM(**kwargs)
-        self.annotation_head = MaskedAnnotationHead(
+        self.annotation_head = ConditionalAnnotationHead(
             dim=int(kwargs["dim"]),
             dropout=float(kwargs.get("dropout", 0.0)),
         )
@@ -119,7 +131,7 @@ class PredictiveCFM(torch.nn.Module):
         if (query_workers is None) != (query_tasks is None):
             raise ValueError("query_workers and query_tasks must be provided together")
         if query_workers is not None and query_tasks is not None:
-            output["hat_annotation_option"] = self.annotation_head(
+            output["hat_annotation_given_truth"] = self.annotation_head(
                 output["z_w"],
                 output["z_t"],
                 output["z_o"],
@@ -129,16 +141,29 @@ class PredictiveCFM(torch.nn.Module):
         return output
 
     @staticmethod
-    def annotation_loss(
-        annotation_logits: torch.Tensor,
+    def supervised_annotation_loss(
+        emission_logits: torch.Tensor,
+        true_task_labels: torch.Tensor,
         observed_answers: torch.Tensor,
     ) -> torch.Tensor:
-        if annotation_logits.ndim != 2:
-            raise ValueError("annotation_logits must have shape [num_edges, num_options]")
-        observed_answers = observed_answers.to(
-            device=annotation_logits.device,
+        """Cross-entropy for synthetic edges whose latent truth is known."""
+
+        if emission_logits.ndim != 3:
+            raise ValueError(
+                "emission_logits must have shape [num_edges, num_truth, num_report]"
+            )
+        true_task_labels = true_task_labels.to(
+            device=emission_logits.device,
             dtype=torch.long,
         )
-        if observed_answers.shape != (annotation_logits.shape[0],):
-            raise ValueError("one observed answer is required for every query edge")
-        return F.cross_entropy(annotation_logits, observed_answers)
+        observed_answers = observed_answers.to(
+            device=emission_logits.device,
+            dtype=torch.long,
+        )
+        if true_task_labels.shape != (emission_logits.shape[0],):
+            raise ValueError("one true task label is required for every query edge")
+        selected_rows = emission_logits[
+            torch.arange(emission_logits.shape[0], device=emission_logits.device),
+            true_task_labels,
+        ]
+        return F.cross_entropy(selected_rows, observed_answers)
