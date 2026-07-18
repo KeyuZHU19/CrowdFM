@@ -2,7 +2,7 @@
 
 ## 1. Model contract
 
-The primary audit no longer estimates a deployment confusion matrix. A compatible model must accept
+The primary audit does not estimate a deployment confusion matrix. A compatible model must accept
 
 ```python
 output = model(
@@ -15,67 +15,103 @@ output = model(
 and return
 
 ```python
-output["hat_annotation_option"]  # [num_query_edges, num_options]
+output["hat_task_option"]               # [num_tasks, num_options]
+output["hat_annotation_given_truth"]   # [num_query_edges, num_options, num_options]
 ```
 
-These logits represent the conditional response distribution for each held-out `(worker, task)` edge. `PredictiveCFM` implements this interface with a scorer shared across candidate options.
+The first tensor parameterizes
 
-The response head must be trained by masked-annotation prediction. `run_predictive_audit` refuses checkpoints whose `PredictiveCFM.response_head_trained` marker is false.
+```math
+q_k(c)=\Pr(Y_k=c\mid G_C).
+```
+
+The second parameterizes the edge-conditioned emission law
+
+```math
+P_{ik}(a\mid c,G_C)
+=\Pr(A_{ik}=a\mid Y_k=c,G_C,i,k),
+```
+
+where the second axis is candidate truth `c` and the final axis is reported option `a`. The final axis is normalized by softmax. `PredictiveCFM` uses a scorer shared across truth/report option embeddings, preserving variable `K`.
+
+The conditional annotation head must be trained by masked-annotation prediction. `run_predictive_audit` refuses a `PredictiveCFM` checkpoint whose trained-head marker is false.
 
 ## 2. Context/audit split
 
-`make_annotation_audit_split` partitions every edge into exactly one of:
+`make_annotation_audit_split` partitions every observed edge into exactly one of:
 
 - context: visible to the model;
-- audit: hidden from the model and used only after response probabilities are fixed.
+- audit: hidden from the model and used only after `q_k` and `P_ik` are fixed.
 
 Each audited task retains at least:
 
-- `min_context_workers` visible labels;
-- `min_audit_workers >= 2` hidden labels.
+- `min_context_workers` visible annotations;
+- `min_audit_workers >= 2` hidden annotations.
 
-Each worker remaining in the audit set has at least `min_worker_context_edges` visible annotations elsewhere in the context graph. If support repair leaves a task with fewer than two audit labels, that task is returned entirely to context.
+Each worker remaining in the audit set has at least `min_worker_context_edges` visible annotations elsewhere. If support repair leaves a task with fewer than two audit labels, that task is returned entirely to context.
 
 ## 3. Training objective
 
-For audit query edge `e=(i,k)` with observed label `A_e`, train
+For synthetic query edge `(i,k)` with known truth `Y_k`, train the corresponding emission row:
 
 ```math
-\mathcal L_{resp}
-=-\sum_e\log r_e(A_e).
+\mathcal L_{emit}
+=-\sum_{(i,k)\in H}\log P_{ik}(A_{ik}\mid Y_k,G_C).
 ```
 
-When synthetic truth is present, add the original task classification loss:
+When a task has no gold truth, train its marginal held-out response likelihood:
+
+```math
+r_{ik}(a)=\sum_c q_k(c)P_{ik}(a\mid c,G_C),
+```
+
+```math
+\mathcal L_{emit}^{ungold}
+=-\sum_{(i,k)\in H}\log r_{ik}(A_{ik}).
+```
+
+When synthetic truth is available, retain the original task classification objective and optimize
 
 ```math
 \mathcal L
-=\lambda_a\mathcal L_{resp}+\lambda_y\mathcal L_{truth}.
+=\lambda_a\mathcal L_{emit}+\lambda_y\mathcal L_{truth}.
 ```
 
-The helper `predictive_training_loss` constructs a fresh masked split and returns both losses. Frozen-backbone head training is the initial baseline; joint fine-tuning is an ablation, not an assumption of the audit.
+`predictive_training_loss` implements known-truth emission supervision and latent-truth marginalization without exposing held-out labels to the context graph.
 
-## 4. Categorical residual
+## 4. Conditional predictive null
 
-For predicted row `r_e` and observed answer `A_e`, define
+For every audit task, the null is
 
 ```math
-u_{e,a}
-=
-\frac{\mathbf 1\{A_e=a\}-r_e(a)}
-{\sqrt{r_e(a)(1-r_e(a))+\epsilon}}.
+Y_k\sim q_k,
 ```
 
-Probabilities are clipped and renormalized using `probability_clip` before residual construction and Monte Carlo sampling.
+```math
+A_{ik}\mid Y_k=c,G_C
+\sim P_{ik}(\cdot\mid c,G_C),
+\qquad i\in H_k,
+```
 
-## 5. Marginal statistic
+independently across workers only conditional on the same sampled `Y_k`.
 
-A scalar log-score sum can be blind to directional class shift when all predicted rows are uniform. The implementation therefore retains the full categorical direction. Define the aggregate residual for option `a` by
+This distinction is necessary. Marginal response rows from workers on the same task are generally dependent because they share the unknown truth. The Monte Carlo implementation therefore samples one truth per task, not one independent marginal answer per edge.
+
+## 5. Marginal categorical statistic
+
+Integrate out task truth:
+
+```math
+r_{ik}(a)=\sum_c q_k(c)P_{ik}(a\mid c,G_C).
+```
+
+For reported option `a`, define
 
 ```math
 z_a
 =
-\frac{\sum_e[\mathbf 1\{A_e=a\}-r_e(a)]}
-{\sqrt{\sum_e r_e(a)(1-r_e(a))+\epsilon}}.
+\frac{\sum_{(i,k)\in H}[\mathbf 1\{A_{ik}=a\}-r_{ik}(a)]}
+{\sqrt{\sum_{(i,k)\in H}r_{ik}(a)(1-r_{ik}(a))+\epsilon}}.
 ```
 
 The marginal statistic is
@@ -84,34 +120,54 @@ The marginal statistic is
 T_{marg}=\lVert z\rVert_2.
 ```
 
-The categorical coordinates are negatively correlated, but no diagonal-Gaussian approximation is used for calibration: the complete statistic is calibrated by sampling categorical labels from the fixed probability rows.
+This retains class direction. Its finite-instance null distribution is obtained by categorical simulation rather than a diagonal Gaussian approximation.
 
-## 6. Dependence statistic
+## 6. Item-conditioned pairwise residual
 
-For worker pair `(i,j)` sharing `n_ij` audit tasks,
+For workers `i,j` held out on task `k`, the model-implied disagreement probability is
+
+```math
+p_{ijk}^{dis}
+=
+1-
+\sum_c q_k(c)
+\sum_a P_{ik}(a\mid c,G_C)P_{jk}(a\mid c,G_C).
+```
+
+Let
+
+```math
+D_{ijk}=\mathbf 1\{A_{ik}\ne A_{jk}\}.
+```
+
+For every supported worker pair,
 
 ```math
 R_{ij}
 =
-\frac{1}{\sqrt{n_{ij}}}
-\sum_k \frac{u_{ik}^{\top}u_{jk}}{K},
+\frac{\sum_k m_{ijk}(D_{ijk}-p_{ijk}^{dis})}
+{\sqrt{\sum_k m_{ijk}p_{ijk}^{dis}(1-p_{ijk}^{dis})+\epsilon}},
 \qquad R_{ii}=0.
 ```
 
-Pairs with fewer than `min_pair_count` shared audit tasks are masked. The statistic is
+Pairs with fewer than `min_pair_count` shared audit tasks are masked. The dependence statistic is
 
 ```math
 T_{dep}=\lVert R\rVert_{op}
-=\max(|\lambda_{max}(R)|,|\lambda_{min}(R)|).
+=\max\{|\lambda_{max}(R)|,|\lambda_{min}(R)|\}.
 ```
 
-The two-sided norm is required because both excess disagreement and excess agreement can indicate misspecification.
+The two-sided norm detects coherent excess disagreement and coherent excess agreement.
 
 ## 7. Conditional Monte Carlo test
 
-Condition on the context graph, query identities, exact audit mask, and fixed response rows. For every replicate sample each audit label independently from its row and recompute both statistics.
+Condition on the context graph, exact split and mask, `q_k`, and every `P_ik`. For each replicate:
 
-For `s in {marg, dep}`:
+1. sample one `Y_k^(b) ~ q_k` per audit task;
+2. sample every held-out response from `P_ik(. | Y_k^(b), G_C)`;
+3. recompute `T_marg` and `T_dep`.
+
+For `s in {marg,dep}`:
 
 ```math
 p_s
@@ -119,21 +175,21 @@ p_s
 \frac{1+\sum_b\mathbf 1\{T_s^{(b)}\ge T_s^{obs}\}}{B+1}.
 ```
 
-The reported joint value is
+The joint p-value is
 
 ```math
-p_{joint}=\min(1,2\min(p_{marg},p_{dep})).
+p_{joint}=\min\{1,2\min(p_{marg},p_{dep})\}.
 ```
 
-Under the fixed predictive null, plus-one Monte Carlo exchangeability makes each component p-value conditionally valid. Bonferroni controls the joint false-rejection probability without assuming independence between statistics.
+Under the fixed predictive null, observed and simulated audit arrays are exchangeable. Each component p-value is finite-sample conditionally valid, and Bonferroni controls the joint false-rejection probability. Since the smallest possible joint value is `2/(B+1)`, the pipeline rejects configurations whose Monte Carlo resolution cannot reach the requested `alpha`.
 
 ## 8. Output semantics
 
-- `reject=True`: the checked held-out response law is rejected at `alpha`;
-- `reject=False`: the audit lacks evidence against that law;
-- neither result directly proves or disproves task-truth correctness.
+- `reject=True`: the learned held-out annotation law is rejected at `alpha`;
+- `reject=False`: insufficient evidence against the checked law;
+- neither result proves or disproves task-truth correctness.
 
-The result returns separate p-values and statistics, response probabilities, support counts, split masks, and bootstrap samples.
+The result returns component and joint p-values, statistics, task posteriors, emission probabilities, marginal response probabilities, support counts, residual matrices, split masks, and bootstrap statistics.
 
 ## 9. Legacy implementation
 
