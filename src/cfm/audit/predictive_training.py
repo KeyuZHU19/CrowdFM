@@ -17,7 +17,7 @@ class PredictiveTrainingConfig:
     audit_task_fraction: float = 1.0
     context_fraction: float = 0.5
     min_context_workers: int = 1
-    min_audit_workers: int = 1
+    min_audit_workers: int = 2
     min_worker_context_edges: int = 0
     truth_loss_weight: float = 1.0
     annotation_loss_weight: float = 1.0
@@ -40,11 +40,9 @@ def predictive_training_loss(
 
     cfg = config or PredictiveTrainingConfig()
     if cfg.truth_loss_weight < 0 or cfg.annotation_loss_weight <= 0:
-        raise ValueError("loss weights must be nonnegative and annotation weight positive")
-
-    # The training objective permits one held-out edge per task; the deployment
-    # dependence audit separately requires at least two.
-    split_min_audit = max(2, cfg.min_audit_workers)
+        raise ValueError(
+            "truth loss weight must be nonnegative and annotation weight positive"
+        )
     split: AnnotationAuditSplit = make_annotation_audit_split(
         data.triple,
         data.num_task,
@@ -52,7 +50,7 @@ def predictive_training_loss(
         audit_task_fraction=cfg.audit_task_fraction,
         context_fraction=cfg.context_fraction,
         min_context_workers=cfg.min_context_workers,
-        min_audit_workers=split_min_audit,
+        min_audit_workers=cfg.min_audit_workers,
         min_worker_context_edges=cfg.min_worker_context_edges,
         seed=seed,
     )
@@ -69,20 +67,20 @@ def predictive_training_loss(
     )
     if "hat_annotation_option" not in output:
         raise KeyError("model must output hat_annotation_option for masked edges")
+    annotation_logits = output["hat_annotation_option"]
     annotation_loss = F.cross_entropy(
-        output["hat_annotation_option"],
-        observed_answers.to(output["hat_annotation_option"].device),
+        annotation_logits,
+        observed_answers.to(annotation_logits.device),
     )
 
     truth_loss = annotation_loss.new_zeros(())
     task_y = getattr(data, "task_y", None)
     if cfg.truth_loss_weight > 0 and isinstance(task_y, torch.Tensor):
+        task_logits = output["hat_task_option"]
+        task_y = task_y.to(task_logits.device)
         valid = task_y != -1
         if torch.any(valid):
-            truth_loss = F.cross_entropy(
-                output["hat_task_option"][valid],
-                task_y.to(output["hat_task_option"].device)[valid],
-            )
+            truth_loss = F.cross_entropy(task_logits[valid], task_y[valid])
 
     total = (
         cfg.annotation_loss_weight * annotation_loss
