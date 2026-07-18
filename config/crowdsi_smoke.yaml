@@ -29,6 +29,7 @@ simulator:
   num_task_range: [8, 12]
   num_option_range: [2, 4]
   num_answer_each_task_range: [3, 5]
+  min_answers_per_task: 3
   mechanism_families:
     - irt
     - class_bias
