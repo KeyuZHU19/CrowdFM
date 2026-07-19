@@ -1,0 +1,10 @@
+device: cpu
+checkpoint: runs/res_mech_ip_s42/10000.pt
+families: coalition
+base_seed: 66000
+num_worlds: 120
+budgets: [0, 5, 10, 20, 50]
+output_path: runs/anchor/coalition.json
+model: {dim: 32, device: cpu, layer: 10, head: 4, dropout: 0.0, mechanism_latent_dim: 16, num_mechanism_primitives: 8}
+simulator: {dim: 32, num_worker_range: [20, 100], num_task_range: [100, 300], num_option_range: [2, 20], num_answer_each_task_range: [3, 10], min_answers_per_task: 3, mechanism_families: [irt, class_bias, coalition, assignment_bias, mixed]}
+path: {data: data, src: src, log: log}

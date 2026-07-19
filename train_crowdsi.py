@@ -53,6 +53,13 @@ def _save_checkpoint(
 
 def main() -> None:
     cfg = dlwheel.setup()
+    run_seed = int(cfg.get("seed", 42))
+    import random as _random
+    import numpy as _np
+    _random.seed(run_seed)
+    _np.random.seed(run_seed % (2**32))
+    torch.manual_seed(run_seed)
+    torch.cuda.manual_seed_all(run_seed)
     training_config = CrowdSITrainingConfig(**dict(cfg.crowdsi_training.to_dict()))
     model = CrowdSIFM(**cfg.model.to_dict()).to(cfg.device)
     backbone_checkpoint = cfg.get("backbone_checkpoint_path", None)
@@ -99,7 +106,7 @@ def main() -> None:
                     model,
                     data,
                     config=training_config,
-                    seed=epoch * 1_000_003 + index,
+                    seed=run_seed * 1_000_000_007 + epoch * 1_000_003 + index,
                 )
                 for index, data in enumerate(batch)
             ]

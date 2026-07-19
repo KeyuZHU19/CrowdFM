@@ -192,6 +192,11 @@ class CrowdSIFM(torch.nn.Module):
 
         self.dim = dim
         self.mechanism_latent_dim = latent_dim
+        # Ablation: when true, the mechanism context C(Z) is zeroed before it
+        # conditions any head, so the (identically sized) heads receive no
+        # mechanism information. Isolates the value of mechanism conditioning
+        # from the added head capacity / retraining.
+        self.disable_mechanism = bool(kwargs.get("disable_mechanism", False))
         self.backbone = CFM(**kwargs)
         self.mechanism_encoder = GaussianMechanismEncoder(dim, latent_dim)
         self.mechanism_basis = CompositionalMechanismBasis(
@@ -294,6 +299,8 @@ class CrowdSIFM(torch.nn.Module):
             dtype=base["z_w"].dtype,
         )
         mechanism_weights, mechanism_context = self.mechanism_basis(mechanism_latent)
+        if self.disable_mechanism:
+            mechanism_context = torch.zeros_like(mechanism_context)
 
         worker_context = mechanism_context.expand(base["z_w"].shape[0], -1)
         task_context = mechanism_context.expand(base["z_t"].shape[0], -1)
