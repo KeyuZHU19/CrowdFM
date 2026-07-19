@@ -623,3 +623,196 @@ crowd FM; (novelty) reliability-identification VOI selection that beats uncertai
 (mechanism) anchor-conditioned correction. Remaining for the paper: ≥3 seeds, real crowd
 datasets, a genuine Sybil/temporal shift, the e-value dataset-level escalation gate
 (when to spend budget), and a learned correction toward the +14–35pp oracle-worker ceiling.
+
+## CrowdGuard on REAL crowd datasets (validated)
+
+`crowdguard_real.py`, frozen CrowdFM (res_mech), anchor-reliability correction + selection,
+gold used only as purchased anchors + scoring. Mean gain over datasets (method − CrowdFM):
+
+| B (anchors) | random | entropy | **VOI (ours)** |
+|---|---:|---:|---:|
+| 10 | +0.7 | **−3.2** | **+1.8** |
+| 20 | +0.9 | −2.9 | **+2.4** |
+| 50 | +2.1 | +1.1 | **+4.1** |
+
+VOI beats random and (failing) entropy on real crowds too — uncertainty sampling is
+negative at low budget, reproducing the synthetic finding. Per-dataset VOI gains (B10→B50):
+Bird +13.9→+20.4, CF +1.7→+8.7, ZC_in +3.8→+2.8, Face +1.7→+7.0, CF* +1.7→+7.0, MS +0.6→+3.1,
+Dog +0.6→+4.0, ZC_all/us +1.8→+2.0, PosSent/LabelMe/SP/Web/RTE small (+0–2pp, CrowdFM already
+strong). Gains largest where CrowdFM has room (Bird, CF, ZC_in).
+
+**Data caveat:** Trec (CrowdFM acc 0.077) and Senti (0.009) are far below chance ⇒ a
+label/option-index misalignment in those two datasets' loading (not real CrowdFM behavior);
+exclude/fix before the paper. The other 14 datasets are sensible (0.63–0.95).
+
+**Status:** CrowdGuard is now validated on synthetic (all shifts) AND real crowds: few
+VOI-selected expert anchors + reliability correction on a frozen CrowdFM give consistent
+gains, beating random and uncertainty-sampling baselines. Remaining: e-value escalation gate
+demo, ≥3 seeds, a genuine Sybil/temporal regime, learned correction toward the oracle-worker
+ceiling, fix Trec/Senti loading, standard baselines.
+
+**Code synced:** committed to branch `agent/crowdguard` (commit c54033a); push pending user
+GitHub auth on the HPC.
+
+## Escalation gate (Stage A) — honest negative; correction is low-risk instead
+
+`escalation_analysis.py`: does any gold-free dataset-level signal predict WHERE expert
+anchoring pays off? Correlation with realized VOI gain@B20 over 14 valid real datasets:
+
+| signal (gold-free) | Spearman | Pearson |
+|---|---:|---:|
+| e-value (response-shift) | −0.07 | −0.15 |
+| CrowdFM entropy | −0.04 | −0.09 |
+| CrowdFM max-confidence | +0.16 | +0.05 |
+| worker disagreement | −0.02 | +0.10 |
+| CrowdFM accuracy (needs gold) | −0.42 | −0.24 |
+
+**Finding:** no cheap signal reliably predicts anchor benefit; the e-value in particular
+does NOT (it detects response-process *shift* — verified, calibrated — which is orthogonal
+to *correctable truth error*, consistent with the likelihood≠truth result). So the planned
+e-value escalation gate is the wrong trigger, and there is no good gold-free "where to
+spend" predictor at the dataset level (gains depend on dataset-specific correctability that
+aggregate stats miss; e.g. Bird +16.7pp is unremarkable on every signal).
+
+**Reframing (what to do instead):** the correction is *low-risk* — at B=20 it is positive
+or ≈0 on all 14 datasets (worst ≈ +0.3pp), never meaningfully negative. So a perfect
+escalation gate is not required: "always apply a small anchor budget" is safe, and the
+value concentrates on the shifted/failure regimes (synthetic coalition/sparse; real Bird/CF/
+ZC_in) — exactly where CrowdFM has room. The paper should present the escalation gate as an
+open problem (and the e-value as a valid shift *detector* but not a benefit predictor),
+and center the contribution on the safe, budget-efficient active-anchoring + correction.
+
+## Sybil / adversarial regime — CrowdGuard's showcase (strongest VOI win)
+
+Added a `sybil` family to the simulator: a fraction (0.2–0.45) of workers report a FIXED
+wrong target class regardless of truth (coordinated attack) — systematically wrong, only
+detectable by cross-task reliability (i.e., expert anchors). This is the canonical scenario
+for the paper's question.
+
+CrowdFM drops to 0.687 under the attack. Effective accuracy vs budget:
+
+| B | random | entropy | **VOI (ours)** | oracle | VOI−random | VOI−entropy |
+|---|---:|---:|---:|---:|---:|---:|
+| 5 | 0.718 | 0.711 | 0.733 | 0.800 | +1.5 | +2.2 |
+| 10 | 0.735 | 0.723 | 0.750 | 0.831 | +1.5 | +2.6 |
+| 20 | 0.763 | 0.745 | 0.784 | 0.864 | +2.2 | +3.9 |
+| 50 | 0.811 | 0.806 | 0.855 | — | +4.4 | +4.9 |
+
+AURC: **VOI 0.2382** < random 0.2572 < entropy 0.2654 (oracle 0.2261). Widest VOI margin
+over baselines of all regimes, and closest to oracle. CrowdGuard recovers CrowdFM
+0.687→0.855 (+16.8pp) at B=50. This is the clean showcase: reliability-identification VOI
+selection + correction is exactly what neutralises coordinated adversarial annotators.
+
+### CrowdGuard status — validated core (multi-regime + real)
+| regime | CrowdFM | VOI beats random | VOI beats entropy | VOI vs oracle (AURC) |
+|---|---:|---|---|---|
+| in-prior (mixed) | 0.851 | + | ++ | near |
+| coalition | 0.675 | ++ | ++ | near |
+| sparse | 0.549 | ++ | + | near |
+| **sybil (adversarial)** | 0.687 | **+++** | **+++** | **closest** |
+| real (14 datasets) | 0.63–0.95 | + (+2.4pp @B20 avg) | ++ (entropy negative) | — |
+
+**Solid contributions:** (1) evidence that a frozen crowd FM leaves large *anchor* headroom
+under deployment shift (oracle-worker +14–35pp); (2) a reliability-identification VOI active
+selection that beats random and decisively beats uncertainty sampling (which is *negative*),
+nearly matching the oracle on adversarial shifts; (3) a low-risk anchor-conditioned
+correction on frozen CrowdFM; validated on 4 synthetic shifts + 14 real datasets.
+**Open/next:** escalation gate (shown hard — reframe as low-risk always-apply), learned
+correction toward the ceiling, ≥3 seeds, temporal-drift regime, standard baselines, fix
+Trec/Senti loading, write-up.
+
+## Correction strength — scalar is near the per-budget frontier (learned correction deprioritized)
+
+`correction_test.py` (fixed VOI selection, isolate the correction): scalar reliability-
+weighted correction vs CrowdFM-prior semi-supervised Dawid–Skene (full K×K confusions) vs
+oracle-worker ceiling (all gold).
+
+| regime | ceiling | scalar @B10/20/50 | cfds(full-confusion) @B10/20/50 |
+|---|---|---|---|
+| coalition | +34.1pp | +6.0 / +10.0 / +18.4 | +3.7 / +7.2 / +16.6 |
+| sparse | +36.7pp | +4.1 / +8.0 / +17.3 | +3.6 / +6.9 / +16.2 |
+| sybil | +29.7pp | +6.7 / +10.3 / +17.5 | +7.5 / +10.3 / +17.4 |
+
+**Finding:** the simple scalar log-odds reliability correction **matches or beats** the
+full-confusion DS at all budgets — with few anchors you can robustly estimate one
+reliability scalar per worker but not full K×K confusions (which are noisy/undersampled).
+The correction bottleneck is **anchor information, not model capacity**, so a *learned*
+correction has limited upside at small budget → **deprioritized**.
+
+**Frontier framing (important for the paper):** the oracle-worker ceiling (+30–37pp) is an
+*information* bound (effectively uses ~all labels), not a method deficiency. At a *fixed
+budget*, VOI selection is within ~0.7% AURC of the *selection* oracle (coalition: VOI 0.254
+vs select-oracle 0.247), and the scalar correction captures ~44–58% of the ceiling by B=50.
+So CrowdGuard is **near the achievable per-budget frontier**; the remaining gap to the
+ceiling closes only by buying more labels. This makes the contribution clean: *expert-
+efficient* correction that is near-optimal for its budget, not a chase after the ceiling.
+
+**Re-prioritized roadmap:** (1) solidify — ≥3 seeds, temporal-drift regime, tighten CIs;
+(2) standard baselines (MV, DS+anchors, honeypot/gold-injection, budget-allocation);
+(3) theory: reliability-identification objective + the information frontier; (4) fix
+Trec/Senti; (5) write-up. Learned correction downgraded to optional.
+
+## ⚠ Baseline reality-check — the frozen-FM prior helps only under adversarial attack
+
+`baseline_test.py` (same VOI anchors for all methods): does the frozen CrowdFM prior beat
+CLASSIC anchor-using aggregators (no FM)? Effective accuracy at B=10/20/50:
+
+| regime | CrowdFM(0) | mv_rw (reliab. MV, no FM) | ds_anchor (semi-sup DS, no FM) | CrowdGuard (FM) | CG − best-no-FM |
+|---|---:|---|---|---|---:|
+| mixed (+sybil) | 0.708 | 0.82/0.85/0.89 | **0.86/0.87/0.91** | 0.83/0.85/0.88 | **−2.1 to −2.6** |
+| coalition | 0.653 | 0.71/0.75/0.84 | 0.70/0.74/0.83 | 0.71/0.75/0.84 | +0.7 / +0.2 / −0.6 |
+| sparse | 0.546 | **0.585/0.624/0.720** | 0.47/0.51/0.62 (collapses) | 0.587/0.626/0.719 | +0.2 / +0.1 / −0.1 |
+| **sybil** | 0.674 | 0.66/0.72/0.83 | 0.71/0.73/0.80 | **0.74/0.78/0.85** | **+3.1 / +4.5 / +2.1** |
+
+**Honest conclusion:** CrowdGuard beats the best *classic anchor-aggregator* clearly ONLY
+under heavy adversarial (Sybil) attack. On benign/mixed, semi-supervised DS+anchors is
+*better* (−2pp); on coalition/sparse a simple reliability-weighted majority vote (no FM)
+ties it. On sparse, mv_rw (0.585) already beats CrowdFM (0.546), so the FM prior contributes
+little — the anchors' reliability estimate does the work. The foundation-model prior is NOT
+pulling weight except when a global view resists coordinated local corruption (Sybil).
+
+**What genuinely stands (independent of this caveat):**
+1. **VOI active selection** — beats random and (failing) uncertainty-sampling for ALL
+   aggregators, on all regimes + real data. This is the robust, novel methodological result.
+2. **Anchor-based reliability weighting recovers accuracy under deployment shift** at small
+   budget (framework-level positive), but classic reliability-MV is a strong baseline.
+3. **Sybil / adversarial** is where the FM prior + the full method clearly win.
+
+**Implication for framing (needs a decision):** the "crowd *foundation model*" angle is
+weaker than hoped — the FM prior only helps under adversarial attack. Stronger honest
+framings: (a) center on **active reliability-identification selection** (VOI beats
+uncertainty sampling — robust, novel, model-agnostic); (b) narrow to **adversarial/Sybil
+deployment** where the full approach shines; or (c) both. NOT a broad "FM + anchors beats
+everything" claim.
+
+## Plan C — Adversarial attack-strength sweep (the money plot)
+
+`baseline_test.py` over Sybil fraction ρ (fixed via `sybil_fraction_range`), budget B=20,
+all methods use the same VOI anchors. CrowdGuard = log CrowdFM + anchor-reliability votes.
+
+| ρ (adversary frac) | CrowdFM | best classic no-FM | **CrowdGuard** | CG − best-no-FM |
+|---:|---:|---:|---:|---:|
+| 0.1 | 0.822 | 0.807 | **0.863** | **+5.6** |
+| 0.2 | 0.791 | 0.774 | **0.839** | **+6.6** |
+| 0.3 | 0.723 | 0.748 | **0.798** | **+5.0** |
+| 0.4 | 0.611 | 0.712 | **0.736** | **+2.4** |
+| 0.5 | 0.415 | 0.673 | 0.635 | **−3.8** |
+
+**Result (plan-C headline):** under low-to-moderate coordinated attack (ρ ≤ 0.4 — the
+realistic regime), **CrowdGuard beats the best classic anchor-aggregator by +2.4 to +6.6pp**,
+peaking at moderate attack. Only under extreme attack (ρ=0.5, half the workers adversarial)
+does it reverse — because CrowdFM *itself* is destroyed (0.415) and anchoring its corrupted
+prior hurts, while FM-free methods recover.
+
+**Attempted fix + insight (honest):** "down-weight the FM prior when it is corrupted" using
+CrowdFM's accuracy on the anchors FAILED (worse everywhere) — because **VOI deliberately
+selects tasks where CrowdFM is likely wrong**, so FM accuracy *measured on the selection
+anchors is biased low* and cannot gauge true FM trust. Correct fix needs an *unbiased* probe
+(spend a few random anchors to estimate FM reliability) or a learned trust signal —
+noted as future work. The clean, defensible result is the fixed CrowdGuard above.
+
+**Plan-C narrative (validated):** *Active expert anchoring for robust crowd aggregation
+under adversarial deployment shift.* (1) VOI reliability-identification selection beats
+uncertainty sampling (which fails) for all aggregators; (2) under realistic coordinated
+attack, FM-anchored correction beats classic anchor methods by +2–7pp; (3) documented
+failure at extreme attack + the selection-bias insight for FM-trust calibration.

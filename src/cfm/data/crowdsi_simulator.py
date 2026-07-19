@@ -23,6 +23,7 @@ class CrowdSISimulator:
         "coalition": 2,
         "assignment_bias": 3,
         "mixed": 4,
+        "sybil": 5,
     }
 
     def __init__(self, **kwargs):
@@ -45,6 +46,8 @@ class CrowdSISimulator:
         unknown = set(self.mechanism_families) - set(self.FAMILY_TO_ID)
         if unknown:
             raise ValueError(f"unknown CrowdSI mechanism families: {sorted(unknown)}")
+        # configurable adversarial-attack strength (for the CrowdGuard adversarial sweep)
+        self.sybil_fraction_range = tuple(kwargs.get("sybil_fraction_range", (0.2, 0.45)))
         self.D = 1.7
 
     @staticmethod
@@ -74,6 +77,9 @@ class CrowdSISimulator:
         )
         coalition_strength = (
             random.uniform(0.4, 0.95) if coalition_fraction > 0 else 0.0
+        )
+        sybil_fraction = (
+            random.uniform(*self.sybil_fraction_range) if family in {"sybil", "mixed"} else 0.0
         )
         assignment_strength = (
             random.uniform(0.5, 2.5)
@@ -155,6 +161,19 @@ class CrowdSISimulator:
             answers = torch.where(follow_coalition, coalition_answer, answers)
         data.coalition_mask = coalition_mask
         data.worker_group = worker_group
+
+        # Sybil / targeted adversarial workers: a fraction of workers report a FIXED wrong
+        # target class regardless of truth (coordinated attack). Systematically wrong ->
+        # only detectable by cross-task reliability, e.g. via expert anchors.
+        sybil_mask = torch.zeros(data.num_worker, dtype=torch.bool)
+        if sybil_fraction > 0:
+            sybil_size = max(1, int(round(sybil_fraction * data.num_worker)))
+            sybil_workers = torch.randperm(data.num_worker)[:sybil_size]
+            sybil_mask[sybil_workers] = True
+            target_class = random.randint(0, data.num_option - 1)
+            sybil_edges = sybil_mask[worker_ids]
+            answers = torch.where(sybil_edges, torch.full_like(answers, target_class), answers)
+        data.sybil_mask = sybil_mask
 
         data.triple = torch.stack([worker_ids, answers, task_ids]).long()
         data.mechanism_family = self.FAMILY_TO_ID[family]
